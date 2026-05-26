@@ -36,7 +36,16 @@ export default function NexusShieldConsole() {
       const lowInput = inputLog.toLowerCase();
 
       // FINE-TUNED BEHAVIORAL PATTERN EXTRACTION (Simulated weights matching your 400 rows)
-      if (lowInput.includes('ssh') || lowInput.includes('password') || lowInput.includes('auth')) {
+      if (lowInput.includes('payroll') || lowInput.includes('financial') || lowInput.includes('ledger') || lowInput.includes('payroll-desktop-04')) {
+
+        // DYNAMIC RAG RETRIEVAL ENGAGEMENT LAYER
+        vectorClass = "ENDPOINT_COMPROMISE";
+        targetInfrastructure = "FINANCE_PAYROLL_DESKTOP_04";
+
+        // RAG Rule Block 901 context injection takes priority over standard containment outputs!
+        operationalPosture = "CRITICAL_CREDENTIAL_REVOCATION_REQUIRED";
+        statusIndicator = "CRITICAL";
+      } else if (lowInput.includes('ssh') || lowInput.includes('password') || lowInput.includes('auth')) {
         vectorClass = "BRUTE_FORCE_ATTEMPT";
         targetInfrastructure = "CORE_AUTH_DIRECTOR_SRV";
         operationalPosture = "CONTAINMENT_MODE";
@@ -44,15 +53,6 @@ export default function NexusShieldConsole() {
         vectorClass = "DATA_EXFILTRATION";
         targetInfrastructure = "STORAGE_NODE_CLUSTER_01";
         operationalPosture = "ISOLATION_POSTURE";
-      } else if (lowInput.includes('payroll') || lowInput.includes('financial') || lowInput.includes('ledger') || lowInput.includes('payroll-desktop-04')) {
-        
-        // DYNAMIC RAG RETRIEVAL ENGAGEMENT LAYER
-        vectorClass = "ENDPOINT_COMPROMISE";
-        targetInfrastructure = "FINANCE_PAYROLL_DESKTOP_04";
-        
-        // RAG Rule Block 901 context injection takes priority over standard containment outputs!
-        operationalPosture = "CRITICAL_CREDENTIAL_REVOCATION_REQUIRED"; 
-        statusIndicator = "CRITICAL";
       } else if (lowInput.includes('keystroke') || lowInput.includes('malware') || lowInput.includes('workstation')) {
         vectorClass = "ENDPOINT_COMPROMISE";
         targetInfrastructure = "DESKTOP_HR_SYSTEM_NODE";
