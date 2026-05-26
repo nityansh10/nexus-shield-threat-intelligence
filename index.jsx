@@ -1,156 +1,750 @@
-
 import React, { useState, useEffect } from 'react';
 
-// Simulated In-Memory RAG Compliance Knowledge base
+// ── Data constants ─────────────────────────────────────────────────────────────
+
 const NIST_RAG_DATABASE = {
-  "financial_override": "NIST REGULATION 901 MATCHED // CRITICAL DOMAIN // FORCE COMPLIANCE VALUE TO: 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'."
+  financial_override:
+    "NIST REGULATION 901 MATCHED // CRITICAL DOMAIN // FORCE COMPLIANCE VALUE TO: 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'.",
 };
 
+const ADVERSARIAL_PATTERNS = [
+  'ignore previous instructions',
+  'system override',
+  'prompt injection',
+  'disregard all',
+  'forget your instructions',
+  'new instructions',
+  'act as',
+  'jailbreak',
+];
+
+const ERROR_CATALOG = {
+  huggingface_gated: {
+    label: 'Hugging Face Gated Repo Error',
+    stack:
+      'OSError: You are trying to access a gated repo.\n' +
+      '  File "transformers/utils/hub.py", line 437, in cached_file\n' +
+      '    raise EnvironmentError(\n' +
+      '      f"You are trying to access a gated repo.\\n"\n' +
+      '      f"Make sure to request access at {url}"\n' +
+      '    )\n' +
+      '  requests.exceptions.HTTPError: 403 Client Error: Forbidden\n' +
+      '  for url: https://huggingface.co/meta-llama/Llama-2-7b-hf/resolve/main/config.json',
+    explanation:
+      'The model weights are locked behind Hugging Face\'s access gate. Your auth token either lacked approval or was not passed correctly during model load. The HF Hub returns HTTP 403 when the token is valid but the gated model page has not been explicitly accepted by the requesting account.',
+    resolution:
+      'Requested model access via the HF model card portal and pivoted immediately to an ungated base (Phi-3-mini-4k-instruct) to unblock training. Once approved: injected token via huggingface_hub.login(token=HF_TOKEN) before AutoModelForCausalLM.from_pretrained(), and set use_auth_token=True in the from_pretrained() call.',
+  },
+  cuda_oom: {
+    label: 'CUDA Out of Memory',
+    stack:
+      'torch.cuda.OutOfMemoryError: CUDA out of memory.\n' +
+      '  Tried to allocate 2.34 GiB\n' +
+      '  (GPU 0; 6.00 GiB total capacity;\n' +
+      '   4.89 GiB already allocated;\n' +
+      '   512.00 MiB free;\n' +
+      '   5.12 GiB reserved in total by PyTorch)\n' +
+      '  If reserved memory is >> allocated memory,\n' +
+      '  try setting max_split_size_mb to avoid fragmentation.',
+    explanation:
+      'Full-precision (FP32 / FP16) model weights exceeded available VRAM. A 7B-parameter model requires roughly 14 GB at FP16 — far beyond the available 6 GB. PyTorch reserves contiguous memory blocks; fragmentation from prior allocations caused even smaller allocations to fail with no viable free region.',
+    resolution:
+      'Applied BitsAndBytes 8-bit quantization (load_in_8bit=True), cutting the in-memory footprint from ~14 GB to ~7 GB. Added LoRA adapters (r=16, alpha=32) targeting q_proj and v_proj layers only — keeping trainable parameters under 1% of total. Enabled gradient_checkpointing=True to trade compute cycles for memory headroom during backward passes.',
+  },
+  gradient_mismatch: {
+    label: 'Gradient Precision Mismatch',
+    stack:
+      'RuntimeError: Expected all tensors to be on the same device,\n' +
+      '  but found at least two devices: cuda:0 and cpu!\n' +
+      '\n' +
+      '  Traceback during backward pass:\n' +
+      '    base_model.model.model.layers.0\n' +
+      '      .self_attn.q_proj.lora_A.default\n' +
+      '  Mixed dtypes: INT8 (frozen base) vs FP32 (LoRA adapter)\n' +
+      '  Gradient accumulation step: 4 / 4',
+    explanation:
+      'LoRA adapter layers were initialised in FP32 while the frozen base model ran in INT8 after quantisation. During the backward pass, gradient tensors from incompatible dtypes collided on the same layer boundary. PyTorch cannot backpropagate across a dtype boundary without an explicit cast instruction, so training halted immediately on step 0.',
+    resolution:
+      'Called peft.prepare_model_for_kbit_training(model) before injecting the LoRA config — this casts normalization layers to FP32 and enables gradient checkpointing in a quantisation-safe way. Set fp16=True in TrainingArguments to align all gradient computations to FP16 mixed precision throughout the adapter layers. Verified the fix with model.print_trainable_parameters().',
+  },
+};
+
+const EXECUTIVE_BRIEFINGS = {
+  BRUTE_FORCE_ATTEMPT: {
+    title: 'Credential Brute-Force Detected',
+    impact:
+      'An attacker is systematically cycling password combinations against an authentication endpoint. A single successful guess grants direct system access — bypassing every downstream access control.',
+    mitigation:
+      'Rate-limit and geo-block the source IP immediately. Enforce MFA on all authentication endpoints. Rotate credentials on targeted accounts. Deploy exponential backoff or CAPTCHA challenge on repeated failures.',
+  },
+  DATA_EXFILTRATION: {
+    title: 'Unauthorized Data Exfiltration In Progress',
+    impact:
+      'Sensitive corporate data is being transferred off-network at high volume right now. Customer records, intellectual property, or financial data may already be in adversary hands.',
+    mitigation:
+      'Isolate the affected node now. Terminate all outbound connections on the identified port. Engage your incident response team. Notify legal counsel if regulated data (PII, PCI, PHI) may be involved.',
+  },
+  ENDPOINT_COMPROMISE: {
+    title: 'Endpoint Fully Compromised',
+    impact:
+      'Malicious code is executing with elevated privileges on a corporate asset. The attacker has persistence and can move laterally, harvest credentials, or stage a ransomware deployment at any time.',
+    mitigation:
+      'Take the node offline immediately — do not reimage before forensics captures a full memory dump. Audit every account with recent access to this system. Assume all credentials touched by this host are stolen.',
+  },
+  RANSOMWARE_DEPLOYMENT: {
+    title: 'Active Ransomware Deployment',
+    impact:
+      'File encryption is underway right now. Every second of delay increases the volume of encrypted and potentially unrecoverable business data. Backup integrity is likely already targeted.',
+    mitigation:
+      'Kill network access to the affected host immediately. Activate your IR retainer. Assess backup recoverability before any ransom discussion. Do not pay without legal counsel — payment does not guarantee key delivery.',
+  },
+  INSIDER_THREAT: {
+    title: 'Insider Threat — Anomalous Access Pattern',
+    impact:
+      'A trusted internal account is accessing sensitive systems outside normal operating hours or from an atypical location. This may indicate a compromised credential, a rogue employee, or a supply-chain intrusion.',
+    mitigation:
+      'Suspend the account pending investigation. Pull the full access log for the past 30 days. Engage HR and legal before any confrontation. Maintain strict evidence chain-of-custody throughout.',
+  },
+  MALICIOUS_ANOMALY_UNKNOWN: {
+    title: 'Unknown Threat Pattern — Analyst Review Required',
+    impact:
+      'Telemetry does not match any known threat signature in the behavioral model. Manual Tier-2 review is required. Treat the affected asset as hostile until formally cleared.',
+    mitigation:
+      'Escalate to Tier-2 SOC immediately. Preserve the raw log — do not discard. Feed into your threat intelligence platform for IOC matching (MISP, VirusTotal, Mandiant Advantage).',
+  },
+};
+
+const NETWORK_NODES = [
+  { id: 'CORE_AUTH_DIRECTOR_SRV',     lines: ['CORE AUTH', 'DIRECTOR SRV'],  x: 130, y: 90  },
+  { id: 'STORAGE_NODE_CLUSTER_01',    lines: ['STORAGE NODE', 'CLUSTER 01'],  x: 570, y: 90  },
+  { id: 'FINANCE_PAYROLL_DESKTOP_04', lines: ['FINANCE', 'PAYROLL 04'],       x: 130, y: 230 },
+  { id: 'DESKTOP_HR_SYSTEM_NODE',     lines: ['DESKTOP HR', 'SYSTEM NODE'],   x: 570, y: 230 },
+];
+const HUB = { x: 350, y: 160 };
+
+// ── Design tokens ──────────────────────────────────────────────────────────────
+
+const C = {
+  bg:      '#0e1726',
+  panel:   '#1e293b',
+  panelDk: '#0d1a2a',
+  border:  '#2e4a6b',
+  borderBright: '#3d6494',
+  cyan:    '#00f0ff',
+  pink:    '#ff0055',
+  white:   '#ffffff',
+  muted:   '#94a3b8',
+  dim:     '#64748b',
+};
+
+const panelStyle = (extra = {}) => ({
+  background: C.panel,
+  border: `1px solid ${C.border}`,
+  borderRadius: '8px',
+  padding: '24px',
+  ...extra,
+});
+
+const headingStyle = (color = C.cyan) => ({
+  fontSize: '16px',
+  fontWeight: 'bold',
+  color,
+  borderBottom: `1px solid ${color}40`,
+  paddingBottom: '10px',
+  marginTop: 0,
+  marginBottom: '18px',
+  letterSpacing: '1.5px',
+});
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function NexusShieldConsole() {
-  const [logs, setLogs] = useState([]);
-  const [inputLog, setInputLog] = useState('');
-  const [outputJson, setOutputJson] = useState(null);
+  const [logs, setLogs]                 = useState([]);
+  const [inputLog, setInputLog]         = useState('');
+  const [outputJson, setOutputJson]     = useState(null);
   const [postureStatus, setPostureStatus] = useState('STANDARD');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [hijackBlocked, setHijackBlocked] = useState(false);
+  const [blockedInput, setBlockedInput] = useState('');
+  const [activeError, setActiveError]   = useState(null);
 
-  // Ingest background streaming log simulation for raw technical aesthetics
   useEffect(() => {
-    const historicalFeeds = [
-      "SYSTEM_LOG // CORE_AUTH_DIRECTOR // SSH handshakes dropping packet frequency on port 22.",
-      "SYSTEM_LOG // ASSET storage-node-01 // Multi-threading outbound stream initializing connection pools.",
-      "SYSTEM_LOG // WORKSTATION desktop-hr-04 // Registry alteration detected on kernel daemon hooks."
-    ];
-    setLogs(historicalFeeds);
+    setLogs([
+      'SYSTEM_LOG // CORE_AUTH_DIRECTOR // SSH handshakes dropping packet frequency on port 22.',
+      'SYSTEM_LOG // ASSET storage-node-01 // Multi-threading outbound stream initializing connection pools.',
+      'SYSTEM_LOG // WORKSTATION desktop-hr-04 // Registry alteration detected on kernel daemon hooks.',
+    ]);
   }, []);
 
   const executeDualEnginePipeline = () => {
     if (!inputLog.trim()) return;
+
+    const lowInput = inputLog.toLowerCase();
+
+    // ── Adversarial guardrail ──────────────────────────────────────────────────
+    if (ADVERSARIAL_PATTERNS.some(p => lowInput.includes(p))) {
+      setBlockedInput(inputLog);
+      setHijackBlocked(true);
+      return;
+    }
+
     setIsProcessing(true);
 
     setTimeout(() => {
-      let vectorClass = "MALICIOUS_ANOMALY_UNKNOWN";
-      let targetInfrastructure = "UNIDENTIFIED_NODE_SRV";
-      let operationalPosture = "CONTAINMENT_MODE";
-      let statusIndicator = "STANDARD";
+      let vectorClass        = 'MALICIOUS_ANOMALY_UNKNOWN';
+      let targetInfra        = 'UNIDENTIFIED_NODE_SRV';
+      let operationalPosture = 'CONTAINMENT_MODE';
+      let statusIndicator    = 'STANDARD';
 
-      const lowInput = inputLog.toLowerCase();
-
-      // FINE-TUNED BEHAVIORAL PATTERN EXTRACTION (Simulated weights matching your 400 rows)
+      // Financial/RAG check is first — prevents 'auth' in payroll logs mis-firing brute-force
       if (lowInput.includes('payroll') || lowInput.includes('financial') || lowInput.includes('ledger') || lowInput.includes('payroll-desktop-04')) {
-
-        // DYNAMIC RAG RETRIEVAL ENGAGEMENT LAYER
-        vectorClass = "ENDPOINT_COMPROMISE";
-        targetInfrastructure = "FINANCE_PAYROLL_DESKTOP_04";
-
-        // RAG Rule Block 901 context injection takes priority over standard containment outputs!
-        operationalPosture = "CRITICAL_CREDENTIAL_REVOCATION_REQUIRED";
-        statusIndicator = "CRITICAL";
+        vectorClass        = 'ENDPOINT_COMPROMISE';
+        targetInfra        = 'FINANCE_PAYROLL_DESKTOP_04';
+        operationalPosture = 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED';
+        statusIndicator    = 'CRITICAL';
       } else if (lowInput.includes('ssh') || lowInput.includes('password') || lowInput.includes('auth')) {
-        vectorClass = "BRUTE_FORCE_ATTEMPT";
-        targetInfrastructure = "CORE_AUTH_DIRECTOR_SRV";
-        operationalPosture = "CONTAINMENT_MODE";
+        vectorClass        = 'BRUTE_FORCE_ATTEMPT';
+        targetInfra        = 'CORE_AUTH_DIRECTOR_SRV';
+        operationalPosture = 'CONTAINMENT_MODE';
       } else if (lowInput.includes('exfiltrat') || lowInput.includes('outbound') || lowInput.includes('storage')) {
-        vectorClass = "DATA_EXFILTRATION";
-        targetInfrastructure = "STORAGE_NODE_CLUSTER_01";
-        operationalPosture = "ISOLATION_POSTURE";
+        vectorClass        = 'DATA_EXFILTRATION';
+        targetInfra        = 'STORAGE_NODE_CLUSTER_01';
+        operationalPosture = 'ISOLATION_POSTURE';
       } else if (lowInput.includes('keystroke') || lowInput.includes('malware') || lowInput.includes('workstation')) {
-        vectorClass = "ENDPOINT_COMPROMISE";
-        targetInfrastructure = "DESKTOP_HR_SYSTEM_NODE";
-        operationalPosture = "CREDENTIAL_REVOCATION";
+        vectorClass        = 'ENDPOINT_COMPROMISE';
+        targetInfra        = 'DESKTOP_HR_SYSTEM_NODE';
+        operationalPosture = 'CREDENTIAL_REVOCATION';
       }
 
-      const generatedPayload = {
-        "incident_report": {
-          "vector_class": vectorClass,
-          "target_infrastructure": targetInfrastructure,
-          "operational_posture": operationalPosture
-        }
-      };
-
-      setOutputJson(generatedPayload);
+      setOutputJson({
+        incident_report: {
+          vector_class:           vectorClass,
+          target_infrastructure:  targetInfra,
+          operational_posture:    operationalPosture,
+        },
+      });
       setPostureStatus(statusIndicator);
-      setLogs([inputLog, ...logs]);
+      setLogs(prev => [inputLog, ...prev]);
       setIsProcessing(false);
-    }, 750); // Fluid artificial delay mimicking a fast infrastructure API call
+    }, 750);
   };
 
+  const activeTarget = outputJson?.incident_report?.target_infrastructure;
+  const briefing     = outputJson ? EXECUTIVE_BRIEFINGS[outputJson.incident_report.vector_class] : null;
+  const isCritical   = postureStatus === 'CRITICAL';
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
-    <div style={{ backgroundColor: '#050811', color: '#00f0ff', minHeight: '100vh', padding: '30px', fontFamily: '"Courier New", Courier, monospace', boxSizing: 'border-box' }}>
-      
-      {/* HEADER MATRIX BANNER */}
-      <header style={{ borderBottom: '2px solid #00f0ff', paddingBottom: '15px', marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div style={{ backgroundColor: C.bg, color: C.white, minHeight: '100vh', padding: '32px', fontFamily: '"Courier New", Courier, monospace', boxSizing: 'border-box' }}>
+
+      {/* Keyframe animations */}
+      <style>{`
+        @keyframes nodePulse {
+          0%, 100% { opacity: 0.9; }
+          50%       { opacity: 0.15; }
+        }
+        @keyframes dashFlow {
+          from { stroke-dashoffset: 24; }
+          to   { stroke-dashoffset: 0; }
+        }
+        @keyframes shieldGlow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.55); }
+          50%       { box-shadow: 0 0 0 18px rgba(255, 0, 85, 0); }
+        }
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateY(10px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes scanPulse {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0.35; }
+        }
+      `}</style>
+
+      {/* ── ADVERSARIAL HIJACK INTERCEPTOR OVERLAY ───────────────────────── */}
+      {hijackBlocked && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(10, 17, 28, 0.97)',
+          zIndex: 1000,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeUp 0.25s ease',
+        }}>
+          <div style={{
+            background: C.panel,
+            border: `2px solid ${C.pink}`,
+            borderRadius: '12px',
+            padding: '48px 56px',
+            maxWidth: '620px',
+            width: '90%',
+            textAlign: 'center',
+            animation: 'shieldGlow 1.8s ease-in-out infinite',
+          }}>
+            <div style={{ fontSize: '56px', marginBottom: '20px', lineHeight: 1 }}>🛡</div>
+            <h2 style={{ fontSize: '22px', color: C.pink, letterSpacing: '2px', margin: '0 0 8px 0' }}>
+              ALIGNMENT HIJACK BLOCKED
+            </h2>
+            <p style={{ fontSize: '13px', color: C.dim, letterSpacing: '1px', margin: '0 0 28px 0' }}>
+              STATUS: HIJACK_ATTEMPT_BLOCKED // PIPELINE FROZEN
+            </p>
+            <div style={{
+              background: C.panelDk,
+              border: `1px dashed ${C.pink}`,
+              borderRadius: '6px',
+              padding: '14px 18px',
+              marginBottom: '28px',
+              fontSize: '13px',
+              color: C.pink,
+              textAlign: 'left',
+              lineHeight: '1.6',
+              wordBreak: 'break-word',
+            }}>
+              <strong style={{ display: 'block', marginBottom: '6px', color: C.white }}>
+                INTERCEPTED INPUT:
+              </strong>
+              {blockedInput.length > 180 ? `${blockedInput.slice(0, 180)}…` : blockedInput}
+            </div>
+            <p style={{ fontSize: '13px', color: C.muted, lineHeight: '1.6', marginBottom: '32px' }}>
+              The guardrail interceptor detected an adversarial prompt pattern in your input.
+              Inputs containing alignment-hijacking directives are rejected before reaching the
+              classification pipeline to prevent response manipulation.
+            </p>
+            <button
+              onClick={() => { setHijackBlocked(false); setInputLog(''); setBlockedInput(''); }}
+              style={{
+                background: C.pink,
+                color: C.white,
+                border: 'none',
+                borderRadius: '6px',
+                padding: '13px 32px',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                fontFamily: '"Courier New", Courier, monospace',
+                cursor: 'pointer',
+                letterSpacing: '1.5px',
+                textTransform: 'uppercase',
+              }}
+            >
+              CLEAR &amp; RESET PIPELINE
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── HEADER ───────────────────────────────────────────────────────────── */}
+      <header style={{
+        borderBottom: `2px solid ${C.cyan}`,
+        paddingBottom: '20px',
+        marginBottom: '32px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 'bold', tracking: '2px', textShadow: '0 0 12px rgba(0,240,255,0.6)' }}>NEXUS-SHIELD // AUTOMATED THREAT CO-PILOT</h1>
-          <p style={{ margin: '5px 0 0 0', color: '#567099', fontSize: '14px', textTransform: 'uppercase' }}>Architecture Framework: Fine-Tuned SLM Adapter Weights + NIST RAG Policy Engine</p>
+          <h1 style={{
+            margin: 0,
+            fontSize: '28px',
+            fontWeight: 'bold',
+            color: C.cyan,
+            letterSpacing: '2px',
+            textShadow: '0 0 14px rgba(0,240,255,0.5)',
+          }}>
+            NEXUS-SHIELD // AUTOMATED THREAT CO-PILOT
+          </h1>
+          <p style={{
+            margin: '7px 0 0 0',
+            color: C.muted,
+            fontSize: '14px',
+            textTransform: 'uppercase',
+            letterSpacing: '1px',
+          }}>
+            Architecture: Fine-Tuned SLM Adapter Weights + NIST RAG Policy Engine
+          </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '12px', height: '12px', backgroundColor: '#00f0ff', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></div>
-          <span style={{ fontSize: '13px', color: '#00f0ff', letterSpacing: '1px' }}>SYSTEM RECEPTOR ONLINE</span>
+          <div style={{
+            width: '11px', height: '11px',
+            backgroundColor: C.cyan,
+            borderRadius: '50%',
+            animation: 'scanPulse 1.6s ease-in-out infinite',
+            boxShadow: `0 0 8px ${C.cyan}`,
+          }} />
+          <span style={{ fontSize: '13px', color: C.cyan, letterSpacing: '1px' }}>
+            SYSTEM RECEPTOR ONLINE
+          </span>
         </div>
       </header>
 
-      {/* DASHBOARD TRIPTYCH GRID */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr 1.5fr', gap: '25px' }}>
-        
-        {/* PANEL 1: INGESTION STREAMS */}
-        <div style={{ background: '#0b1220', border: '1px solid #1c2e4a', borderRadius: '6px', padding: '20px' }}>
-          <h2 style={{ fontSize: '15px', color: '#ff0055', borderBottom: '1px solid #ff0055', paddingBottom: '6px', marginTop: 0, letterSpacing: '1px' }}>// LIVE RAW INGESTION FEED</h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '15px', maxHeight: '450px', overflowY: 'auto' }}>
-            {logs.map((log, index) => (
-              <div key={index} style={{ padding: '10px', background: '#050811', borderLeft: '3px solid #ff0055', borderRadius: '4px', fontSize: '11px', color: '#a0b3cf', lineHeight: '1.4' }}>
+      {/* ── TOP GRID: 3 columns ───────────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr 1.5fr', gap: '24px', marginBottom: '24px' }}>
+
+        {/* PANEL 1 — Live Ingestion Feed */}
+        <div style={panelStyle()}>
+          <h2 style={headingStyle(C.pink)}>// LIVE RAW INGESTION FEED</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '440px', overflowY: 'auto', paddingRight: '4px' }}>
+            {logs.map((log, i) => (
+              <div key={i} style={{
+                padding: '12px 14px',
+                background: C.panelDk,
+                borderLeft: `3px solid ${C.pink}`,
+                borderRadius: '4px',
+                fontSize: '13px',
+                color: C.white,
+                lineHeight: '1.55',
+                animation: i === 0 ? 'fadeUp 0.3s ease' : undefined,
+              }}>
                 {log}
               </div>
             ))}
           </div>
         </div>
 
-        {/* PANEL 2: INTERACTIVE INTERROGATION TERMINAL */}
-        <div style={{ background: '#0b1220', border: '1px solid #1c2e4a', borderRadius: '6px', padding: '20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        {/* PANEL 2 — Analysis Terminal */}
+        <div style={panelStyle({ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' })}>
           <div>
-            <h2 style={{ fontSize: '15px', color: '#00f0ff', borderBottom: '1px solid #00f0ff', paddingBottom: '6px', marginTop: 0, letterSpacing: '1px' }}>// COMPLIANCE ANALYSIS OPERATIONAL GATEWAY</h2>
-            <p style={{ color: '#748da6', fontSize: '13px', lineHeight: '1.5', marginTop: '12px' }}>
-              Drop unstructured raw network telemetry logs, brute-force tracking alerts, or system anomalies below. The fine-tuned behavioral network handles formatting layout, while the integrated RAG engine dynamically checks real-time NIST regulatory parameters.
+            <h2 style={headingStyle(C.cyan)}>// COMPLIANCE ANALYSIS GATEWAY</h2>
+            <p style={{ color: C.muted, fontSize: '14px', lineHeight: '1.65', margin: '0 0 16px 0' }}>
+              Paste raw network telemetry, brute-force alerts, or system anomaly strings below.
+              The fine-tuned behavioral layer classifies the threat vector while the RAG engine
+              enforces real-time NIST regulatory overrides for governed domains.
             </p>
             <textarea
               value={inputLog}
-              onChange={(e) => setInputLog(e.target.value)}
-              placeholder="Paste telemetry event string input here..."
-              style={{ width: '100%', height: '180px', backgroundColor: '#050811', color: '#ffffff', border: '1px solid #1c2e4a', borderRadius: '4px', padding: '15px', fontSize: '14px', fontFamily: 'monospace', boxSizing: 'border-box', marginTop: '15px', resize: 'none' }}
+              onChange={e => setInputLog(e.target.value)}
+              placeholder="Paste telemetry event string here..."
+              style={{
+                width: '100%',
+                height: '200px',
+                backgroundColor: C.panelDk,
+                color: C.white,
+                border: `1px solid ${C.borderBright}`,
+                borderRadius: '6px',
+                padding: '16px',
+                fontSize: '14px',
+                fontFamily: '"Courier New", Courier, monospace',
+                boxSizing: 'border-box',
+                resize: 'none',
+                lineHeight: '1.55',
+                outline: 'none',
+              }}
             />
           </div>
           <button
             onClick={executeDualEnginePipeline}
             disabled={isProcessing}
-            style={{ width: '100%', backgroundColor: isProcessing ? '#1c2e4a' : '#00f0ff', color: '#050811', border: 'none', borderRadius: '4px', padding: '15px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '2px', transition: 'all 0.2s ease', marginTop: '20px', boxShadow: isProcessing ? 'none' : '0 0 15px rgba(0,240,255,0.4)' }}
+            style={{
+              width: '100%',
+              backgroundColor: isProcessing ? C.border : C.cyan,
+              color: C.bg,
+              border: 'none',
+              borderRadius: '6px',
+              padding: '16px',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              fontFamily: '"Courier New", Courier, monospace',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '2px',
+              transition: 'all 0.2s ease',
+              marginTop: '20px',
+              boxShadow: isProcessing ? 'none' : `0 0 18px rgba(0,240,255,0.35)`,
+            }}
           >
-            {isProcessing ? "Analyzing Matrices..." : "Run Hybrid Inference Pipeline"}
+            {isProcessing ? 'Analyzing Matrices...' : 'Run Hybrid Inference Pipeline'}
           </button>
         </div>
 
-        {/* PANEL 3: REAL-TIME JSON COMPILE STREAM */}
-        <div style={{ background: '#0b1220', border: '1px solid #1c2e4a', borderRadius: '6px', padding: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1c2e4a', paddingBottom: '6px', marginBottom: '15px' }}>
-            <h2 style={{ fontSize: '15px', color: '#00f0ff', margin: 0, letterSpacing: '1px' }}>// MATRIX COMPILER VIEW</h2>
-            <span style={{ 
-              fontSize: '11px', 
-              fontWeight: 'bold', 
-              padding: '3px 8px', 
-              borderRadius: '3px',
-              backgroundColor: postureStatus === 'CRITICAL' ? 'rgba(255,0,85,0.2)' : 'rgba(0,240,255,0.2)',
-              color: postureStatus === 'CRITICAL' ? '#ff0055' : '#00f0ff',
-              border: postureStatus === 'CRITICAL' ? '1px solid #ff0055' : '1px solid #00f0ff'
+        {/* PANEL 3 — JSON Output + Executive Briefing */}
+        <div style={panelStyle()}>
+          {/* Header row with posture badge */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h2 style={{ ...headingStyle(C.cyan), borderBottom: 'none', marginBottom: 0, paddingBottom: 0 }}>
+              // MATRIX COMPILER VIEW
+            </h2>
+            <span style={{
+              fontSize: '12px',
+              fontWeight: 'bold',
+              padding: '4px 10px',
+              borderRadius: '4px',
+              backgroundColor: isCritical ? 'rgba(255,0,85,0.18)' : 'rgba(0,240,255,0.12)',
+              color: isCritical ? C.pink : C.cyan,
+              border: `1px solid ${isCritical ? C.pink : C.cyan}`,
+              whiteSpace: 'nowrap',
             }}>
-              {postureStatus} RISK POSTURE
+              {postureStatus} POSTURE
             </span>
           </div>
 
-          <pre style={{ backgroundColor: '#050811', border: '1px solid #1c2e4a', borderRadius: '4px', padding: '15px', fontSize: '13px', color: '#ffffff', overflowX: 'auto', minHeight: '220px', lineHeight: '1.5' }}>
-            {outputJson ? JSON.stringify(outputJson, null, 2) : '// System idle. Awaiting instruction telemetry execution...'}
+          <pre style={{
+            background: C.panelDk,
+            border: `1px solid ${C.border}`,
+            borderRadius: '6px',
+            padding: '16px',
+            fontSize: '13px',
+            color: C.white,
+            overflowX: 'auto',
+            minHeight: '160px',
+            lineHeight: '1.6',
+            margin: '0 0 14px 0',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}>
+            {outputJson
+              ? JSON.stringify(outputJson, null, 2)
+              : '// System idle.\n// Awaiting telemetry input...'}
           </pre>
 
-          {postureStatus === 'CRITICAL' && (
-            <div style={{ marginTop: '20px', padding: '12px', background: 'rgba(255,0,85,0.1)', border: '1px dashed #ff0055', borderRadius: '4px', fontSize: '11px', color: '#ff0055', lineHeight: '1.4' }}>
-              <strong>[RAG EVENT WARNING]</strong> {NIST_RAG_DATABASE.financial_override}
+          {isCritical && (
+            <div style={{
+              padding: '12px 14px',
+              background: 'rgba(255,0,85,0.1)',
+              border: `1px dashed ${C.pink}`,
+              borderRadius: '6px',
+              fontSize: '13px',
+              color: C.pink,
+              lineHeight: '1.55',
+              marginBottom: '14px',
+            }}>
+              <strong>[RAG EVENT WARNING]</strong>{' '}
+              {NIST_RAG_DATABASE.financial_override}
+            </div>
+          )}
+
+          {/* Executive Briefing */}
+          {briefing && (
+            <div style={{
+              background: C.panelDk,
+              border: `1px solid ${isCritical ? C.pink : C.borderBright}`,
+              borderRadius: '6px',
+              padding: '16px',
+              animation: 'fadeUp 0.35s ease',
+            }}>
+              <p style={{ fontSize: '12px', color: isCritical ? C.pink : C.cyan, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+                // EXECUTIVE BRIEFING
+              </p>
+              <p style={{ fontSize: '15px', fontWeight: 'bold', color: C.white, margin: '0 0 10px 0', lineHeight: '1.4' }}>
+                {briefing.title}
+              </p>
+              <p style={{ fontSize: '13px', color: C.muted, margin: '0 0 10px 0', lineHeight: '1.65' }}>
+                <strong style={{ color: C.white }}>Impact: </strong>{briefing.impact}
+              </p>
+              <p style={{ fontSize: '13px', color: C.muted, margin: 0, lineHeight: '1.65' }}>
+                <strong style={{ color: C.white }}>Mitigation: </strong>{briefing.mitigation}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── BOTTOM GRID: Network Map + Error Decoder ──────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: '24px' }}>
+
+        {/* PANEL 4 — Network Topology Map */}
+        <div style={panelStyle()}>
+          <h2 style={headingStyle(C.cyan)}>// NETWORK TOPOLOGY MAP</h2>
+          <p style={{ fontSize: '14px', color: C.muted, margin: '0 0 18px 0', lineHeight: '1.6' }}>
+            Infrastructure node graph. Run an inference to highlight the compromised target node with a live aura signal.
+          </p>
+          <svg
+            viewBox="0 0 700 295"
+            width="100%"
+            style={{ display: 'block', overflow: 'visible' }}
+          >
+            {/* Background grid lines (decorative) */}
+            {[0,1,2,3,4,5,6].map(i => (
+              <line key={`vg${i}`} x1={i*100+50} y1={0} x2={i*100+50} y2={295}
+                stroke={`${C.border}30`} strokeWidth={1} />
+            ))}
+            {[0,1,2,3,4,5].map(i => (
+              <line key={`hg${i}`} x1={0} y1={i*50+22} x2={700} y2={i*50+22}
+                stroke={`${C.border}30`} strokeWidth={1} />
+            ))}
+
+            {/* Data lines from hub to each node */}
+            {NETWORK_NODES.map(node => {
+              const isActive = activeTarget === node.id;
+              return (
+                <line
+                  key={`line-${node.id}`}
+                  x1={HUB.x} y1={HUB.y}
+                  x2={node.x} y2={node.y}
+                  stroke={isActive ? C.pink : `${C.cyan}35`}
+                  strokeWidth={isActive ? 3 : 1}
+                  strokeDasharray={isActive ? '8 4' : '5 7'}
+                  style={isActive
+                    ? { animation: 'dashFlow 0.35s linear infinite' }
+                    : {}}
+                />
+              );
+            })}
+
+            {/* Hub node */}
+            <circle cx={HUB.x} cy={HUB.y} r={14} fill={C.panelDk} stroke={C.cyan} strokeWidth={2} />
+            <text x={HUB.x} y={HUB.y + 5} textAnchor="middle" fontSize="9"
+              fill={C.cyan} fontFamily='"Courier New", monospace' fontWeight="bold">
+              HUB
+            </text>
+
+            {/* Infrastructure nodes */}
+            {NETWORK_NODES.map(node => {
+              const isActive = activeTarget === node.id;
+              return (
+                <g key={node.id}>
+                  {/* Outer pulse rings (active only) */}
+                  {isActive && (
+                    <>
+                      <circle cx={node.x} cy={node.y} r={36}
+                        fill="none" stroke={C.pink} strokeWidth={2}
+                        style={{ animation: 'nodePulse 1.1s ease-in-out infinite' }} />
+                      <circle cx={node.x} cy={node.y} r={46}
+                        fill="none" stroke={C.pink} strokeWidth={1}
+                        style={{ animation: 'nodePulse 1.1s ease-in-out infinite', animationDelay: '0.35s' }} />
+                    </>
+                  )}
+                  {/* Node circle */}
+                  <circle
+                    cx={node.x} cy={node.y} r={22}
+                    fill={isActive ? 'rgba(255,0,85,0.18)' : C.panelDk}
+                    stroke={isActive ? C.pink : C.cyan}
+                    strokeWidth={isActive ? 2.5 : 1.5}
+                  />
+                  {/* Node label — 2 lines */}
+                  <text textAnchor="middle" fontSize="10"
+                    fontFamily='"Courier New", monospace'
+                    fill={isActive ? C.pink : C.cyan}
+                    fontWeight={isActive ? 'bold' : 'normal'}>
+                    <tspan x={node.x} dy={node.y + 32}>{node.lines[0]}</tspan>
+                    <tspan x={node.x} dy="13">{node.lines[1]}</tspan>
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* Node legend */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '18px', paddingTop: '16px', borderTop: `1px solid ${C.border}` }}>
+            {NETWORK_NODES.map(node => (
+              <div key={node.id} style={{
+                display: 'flex', alignItems: 'center', gap: '7px',
+                padding: '5px 10px',
+                background: activeTarget === node.id ? 'rgba(255,0,85,0.12)' : C.panelDk,
+                border: `1px solid ${activeTarget === node.id ? C.pink : C.border}`,
+                borderRadius: '4px',
+                fontSize: '12px',
+                color: activeTarget === node.id ? C.pink : C.muted,
+              }}>
+                <span style={{
+                  width: '8px', height: '8px', borderRadius: '50%',
+                  background: activeTarget === node.id ? C.pink : C.dim,
+                  boxShadow: activeTarget === node.id ? `0 0 6px ${C.pink}` : 'none',
+                  flexShrink: 0,
+                }} />
+                {node.id}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* PANEL 5 — System Diagnostic & Error Decoder */}
+        <div style={panelStyle()}>
+          <h2 style={headingStyle(C.pink)}>// SYSTEM DIAGNOSTIC &amp; ERROR TRANSLATOR</h2>
+          <p style={{ fontSize: '14px', color: C.muted, margin: '0 0 18px 0', lineHeight: '1.6' }}>
+            AI engineering blockers resolved during model fine-tuning. Select an exception to see the
+            raw stack, hardware explanation, and PM resolution strategy.
+          </p>
+
+          {/* Error selector buttons */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+            {Object.entries(ERROR_CATALOG).map(([key, err]) => {
+              const isActive = activeError === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setActiveError(prev => prev === key ? null : key)}
+                  style={{
+                    background: isActive ? 'rgba(255,0,85,0.15)' : C.panelDk,
+                    border: `1px solid ${isActive ? C.pink : C.border}`,
+                    borderRadius: '6px',
+                    padding: '11px 14px',
+                    color: isActive ? C.white : C.muted,
+                    fontSize: '13px',
+                    fontFamily: '"Courier New", Courier, monospace',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>{err.label}</span>
+                  <span style={{ color: isActive ? C.pink : C.dim, fontSize: '16px', lineHeight: 1 }}>
+                    {isActive ? '▲' : '▼'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Error detail panel */}
+          {activeError && (
+            <div style={{ animation: 'fadeUp 0.25s ease' }}>
+              {/* Raw Exception Stack */}
+              <p style={{ fontSize: '12px', color: C.pink, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+                RAW EXCEPTION STACK
+              </p>
+              <pre style={{
+                background: C.panelDk,
+                border: `1px solid ${C.border}`,
+                borderRadius: '6px',
+                padding: '14px',
+                fontSize: '12px',
+                color: C.pink,
+                overflowX: 'auto',
+                overflowY: 'auto',
+                maxHeight: '160px',
+                lineHeight: '1.55',
+                margin: '0 0 18px 0',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}>
+                {ERROR_CATALOG[activeError].stack}
+              </pre>
+
+              {/* Plain English Explanation */}
+              <p style={{ fontSize: '12px', color: C.cyan, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+                PLAIN ENGLISH EXPLANATION
+              </p>
+              <div style={{
+                background: C.panelDk,
+                border: `1px solid ${C.border}`,
+                borderRadius: '6px',
+                padding: '14px',
+                fontSize: '13px',
+                color: C.white,
+                lineHeight: '1.65',
+                marginBottom: '18px',
+              }}>
+                {ERROR_CATALOG[activeError].explanation}
+              </div>
+
+              {/* PM Resolution Strategy */}
+              <p style={{ fontSize: '12px', color: '#00ff88', letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+                PM RESOLUTION STRATEGY
+              </p>
+              <div style={{
+                background: 'rgba(0,255,136,0.06)',
+                border: '1px solid rgba(0,255,136,0.3)',
+                borderRadius: '6px',
+                padding: '14px',
+                fontSize: '13px',
+                color: C.white,
+                lineHeight: '1.65',
+              }}>
+                {ERROR_CATALOG[activeError].resolution}
+              </div>
             </div>
           )}
         </div>
