@@ -1,5 +1,5 @@
 import React from 'react';
-import NexusShieldConsole from '../index.js';
+import NexusShieldConsole from '../index.jsx';
 
 const globalStyles = `
   *, *::before, *::after {
