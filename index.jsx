@@ -137,6 +137,21 @@ const C = {
   dim:     '#64748b',
 };
 
+// Returns the accent color for a network node based on threat severity and node identity.
+// FINANCE/CRITICAL → crimson, CORE_AUTH → cyan, all others → amber.
+const getNodeColor = (nodeId, isCritical) => {
+  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return '#ff0055';
+  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return '#00f0ff';
+  return '#ffaa00';
+};
+
+// Returns a low-opacity fill that pairs with each node's accent color.
+const getNodeFill = (nodeId, isCritical) => {
+  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return 'rgba(255,0,85,0.15)';
+  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return 'rgba(0,240,255,0.12)';
+  return 'rgba(255,170,0,0.15)';
+};
+
 const panelStyle = (extra = {}) => ({
   background: C.panel,
   border: `1px solid ${C.border}`,
@@ -564,13 +579,14 @@ export default function NexusShieldConsole() {
 
             {/* Data lines from hub to each node */}
             {NETWORK_NODES.map(node => {
-              const isActive = activeTarget === node.id;
+              const isActive  = activeTarget === node.id;
+              const nodeColor = getNodeColor(node.id, isCritical);
               return (
                 <line
                   key={`line-${node.id}`}
                   x1={HUB.x} y1={HUB.y}
                   x2={node.x} y2={node.y}
-                  stroke={isActive ? C.pink : `${C.cyan}35`}
+                  stroke={isActive ? nodeColor : `${C.cyan}35`}
                   strokeWidth={isActive ? 3 : 1}
                   strokeDasharray={isActive ? '8 4' : '5 7'}
                   style={isActive
@@ -589,31 +605,33 @@ export default function NexusShieldConsole() {
 
             {/* Infrastructure nodes */}
             {NETWORK_NODES.map(node => {
-              const isActive = activeTarget === node.id;
+              const isActive  = activeTarget === node.id;
+              const nodeColor = getNodeColor(node.id, isCritical);
+              const nodeFill  = getNodeFill(node.id, isCritical);
               return (
                 <g key={node.id}>
                   {/* Outer pulse rings (active only) */}
                   {isActive && (
                     <>
                       <circle cx={node.x} cy={node.y} r={36}
-                        fill="none" stroke={C.pink} strokeWidth={2}
+                        fill="none" stroke={nodeColor} strokeWidth={2}
                         style={{ animation: 'nodePulse 1.1s ease-in-out infinite' }} />
                       <circle cx={node.x} cy={node.y} r={46}
-                        fill="none" stroke={C.pink} strokeWidth={1}
+                        fill="none" stroke={nodeColor} strokeWidth={1}
                         style={{ animation: 'nodePulse 1.1s ease-in-out infinite', animationDelay: '0.35s' }} />
                     </>
                   )}
                   {/* Node circle */}
                   <circle
                     cx={node.x} cy={node.y} r={22}
-                    fill={isActive ? 'rgba(255,0,85,0.18)' : C.panelDk}
-                    stroke={isActive ? C.pink : C.cyan}
+                    fill={isActive ? nodeFill : C.panelDk}
+                    stroke={isActive ? nodeColor : C.cyan}
                     strokeWidth={isActive ? 2.5 : 1.5}
                   />
                   {/* Node label — 2 lines */}
                   <text textAnchor="middle" fontSize="10"
                     fontFamily='"Courier New", monospace'
-                    fill={isActive ? C.pink : C.cyan}
+                    fill={isActive ? nodeColor : C.cyan}
                     fontWeight={isActive ? 'bold' : 'normal'}>
                     <tspan x={node.x} dy={node.y + 32}>{node.lines[0]}</tspan>
                     <tspan x={node.x} dy="13">{node.lines[1]}</tspan>
@@ -625,25 +643,30 @@ export default function NexusShieldConsole() {
 
           {/* Node legend */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '18px', paddingTop: '16px', borderTop: `1px solid ${C.border}` }}>
-            {NETWORK_NODES.map(node => (
-              <div key={node.id} style={{
-                display: 'flex', alignItems: 'center', gap: '7px',
-                padding: '5px 10px',
-                background: activeTarget === node.id ? 'rgba(255,0,85,0.12)' : C.panelDk,
-                border: `1px solid ${activeTarget === node.id ? C.pink : C.border}`,
-                borderRadius: '4px',
-                fontSize: '12px',
-                color: activeTarget === node.id ? C.pink : C.muted,
-              }}>
-                <span style={{
-                  width: '8px', height: '8px', borderRadius: '50%',
-                  background: activeTarget === node.id ? C.pink : C.dim,
-                  boxShadow: activeTarget === node.id ? `0 0 6px ${C.pink}` : 'none',
-                  flexShrink: 0,
-                }} />
-                {node.id}
-              </div>
-            ))}
+            {NETWORK_NODES.map(node => {
+              const isActive  = activeTarget === node.id;
+              const nodeColor = getNodeColor(node.id, isCritical);
+              const nodeFill  = getNodeFill(node.id, isCritical);
+              return (
+                <div key={node.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '7px',
+                  padding: '5px 10px',
+                  background: isActive ? nodeFill : C.panelDk,
+                  border: `1px solid ${isActive ? nodeColor : C.border}`,
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  color: isActive ? nodeColor : C.muted,
+                }}>
+                  <span style={{
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    background: isActive ? nodeColor : C.dim,
+                    boxShadow: isActive ? `0 0 6px ${nodeColor}` : 'none',
+                    flexShrink: 0,
+                  }} />
+                  {node.id}
+                </div>
+              );
+            })}
           </div>
         </div>
 
