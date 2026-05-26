@@ -91,6 +91,13 @@ const EXECUTIVE_BRIEFINGS = {
     mitigation:
       'Take the node offline immediately — do not reimage before forensics captures a full memory dump. Audit every account with recent access to this system. Assume all credentials touched by this host are stolen.',
   },
+  FINANCIAL_SYSTEM_COMPROMISE: {
+    title: 'Critical Financial System Breach — NIST RAG Policy Engaged',
+    impact:
+      'A high-value financial or payroll system has been compromised. Beyond standard endpoint risk, this directly exposes employee compensation records, banking credentials, and tax data. Mandatory regulatory disclosure may be triggered under SOX, PCI-DSS, and GDPR frameworks within 72 hours.',
+    mitigation:
+      'Invoke the NIST 901 credential revocation protocol immediately — all finance-domain tokens must be invalidated now. Isolate the finance network segment from all other infrastructure. Notify your CFO, General Counsel, and external auditors before any other action. Do not run payroll cycles until full forensic clearance is obtained and documented.',
+  },
   RANSOMWARE_DEPLOYMENT: {
     title: 'Active Ransomware Deployment',
     impact:
@@ -204,6 +211,7 @@ export default function NexusShieldConsole() {
     }
 
     setIsProcessing(true);
+    setPostureStatus('STANDARD'); // clear any stale CRITICAL badge from a previous run
 
     setTimeout(() => {
       let vectorClass        = 'MALICIOUS_ANOMALY_UNKNOWN';
@@ -213,7 +221,7 @@ export default function NexusShieldConsole() {
 
       // Financial/RAG check is first — prevents 'auth' in payroll logs mis-firing brute-force
       if (lowInput.includes('payroll') || lowInput.includes('financial') || lowInput.includes('ledger') || lowInput.includes('payroll-desktop-04')) {
-        vectorClass        = 'ENDPOINT_COMPROMISE';
+        vectorClass        = 'FINANCIAL_SYSTEM_COMPROMISE';
         targetInfra        = 'FINANCE_PAYROLL_DESKTOP_04';
         operationalPosture = 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED';
         statusIndicator    = 'CRITICAL';
@@ -245,7 +253,9 @@ export default function NexusShieldConsole() {
   };
 
   const activeTarget = outputJson?.incident_report?.target_infrastructure;
-  const briefing     = outputJson ? EXECUTIVE_BRIEFINGS[outputJson.incident_report.vector_class] : null;
+  const briefing     = outputJson
+    ? (EXECUTIVE_BRIEFINGS[outputJson.incident_report.vector_class] ?? EXECUTIVE_BRIEFINGS.MALICIOUS_ANOMALY_UNKNOWN)
+    : null;
   const isCritical   = postureStatus === 'CRITICAL';
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -633,8 +643,8 @@ export default function NexusShieldConsole() {
                     fontFamily='"Courier New", monospace'
                     fill={isActive ? nodeColor : C.cyan}
                     fontWeight={isActive ? 'bold' : 'normal'}>
-                    <tspan x={node.x} dy={node.y + 32}>{node.lines[0]}</tspan>
-                    <tspan x={node.x} dy="13">{node.lines[1]}</tspan>
+                    <tspan x={node.x} y={node.y + 32}>{node.lines[0]}</tspan>
+                    <tspan x={node.x} y={node.y + 46}>{node.lines[1]}</tspan>
                   </text>
                 </g>
               );
