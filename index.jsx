@@ -679,12 +679,20 @@ export default function NexusShieldConsole() {
         ? `RETRIEVED COMPLIANCE CONTEXT:\n${ragContext}\n\nSECURITY LOG TO CLASSIFY:\n${inputLog}`
         : inputLog;
 
-      const result   = await geminiModel.generateContent(prompt);
-      const rawText  = result.response.text().trim();
-      const jsonText = rawText
+      const result  = await geminiModel.generateContent(prompt);
+      const rawText = result.response.text().trim();
+      // Layer 1 sanitization: strip markdown code fences if model emits them despite responseMimeType:json
+      let jsonText = rawText
         .replace(/^```(?:json)?\s*/i, '')
         .replace(/\s*```$/,           '')
         .trim();
+      // Layer 2 sanitization: extract the JSON object by brace range in case any text
+      // leaked before or after the outermost { } — covers trailing explanations after closing fence
+      const firstBrace = jsonText.indexOf('{');
+      const lastBrace  = jsonText.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        jsonText = jsonText.slice(firstBrace, lastBrace + 1);
+      }
       const parsed = JSON.parse(jsonText);
 
       setOutputJson({
