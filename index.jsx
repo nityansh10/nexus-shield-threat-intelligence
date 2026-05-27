@@ -660,7 +660,7 @@ export default function NexusShieldConsole() {
       // Phase C: Semantic similarity search against Supabase compliance_policies
       const { data: ragPolicies, error: ragError } = await supabaseClient.rpc('match_policies', {
         query_embedding: queryVector,
-        match_threshold: 0.15,
+        match_threshold: 0.0,
         match_count:     3,
       });
       if (ragError) throw ragError;
