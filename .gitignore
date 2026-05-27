@@ -12,3 +12,5 @@ yarn-error.log*
 .vite/
 
 .vercel
+.claude/
+seed-compliance.sql
