@@ -7,14 +7,155 @@ const NIST_RAG_DATABASE = {
     "NIST REGULATION 901 MATCHED // CRITICAL DOMAIN // FORCE COMPLIANCE VALUE TO: 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'.",
 };
 
+// ── Signal-based threat classification engine ──────────────────────────────
+// Each category carries a list of [keyword, weight] pairs and default
+// output values when that category wins the scoring round.
+// Keywords are matched against lowercased input so case is irrelevant.
+// Target infrastructure is extracted from the raw log text separately —
+// the default is used only when no known node ID is found in the log.
+
+const SIGNAL_RULES = {
+  RANSOMWARE_DEPLOYMENT: {
+    signals: [
+      ['.locked', 4], ['.crypto', 4], ['.ransom', 4],
+      ['readme_decrypt', 5], ['your files are encrypted', 5],
+      ['decryption key', 4], ['ransom note', 5],
+      ['vssadmin delete', 5], ['delete shadows', 5], ['shadow copy delet', 4],
+      ['wbadmin delete', 4], ['bcdedit /set', 3],
+      ['file entropy', 3], ['high-frequency encryption', 4],
+      ['file encryption detected', 5], ['mass file rename', 3],
+      ['ransomware', 5], ['crypto locker', 4],
+    ],
+    defaultPosture: 'ISOLATION_POSTURE',
+    defaultTarget: 'STORAGE_NODE_CLUSTER_01',
+  },
+  ENDPOINT_COMPROMISE: {
+    signals: [
+      // LOLBins (native binaries abused for staging / C2)
+      ['certutil', 4], ['regsvr32', 4], ['mshta', 4], ['rundll32', 3],
+      ['wscript', 3], ['cscript', 3], ['installutil', 3],
+      // C2 beacon indicators
+      ['encrypted keepalive', 5], ['keepalive', 3], ['c2 beacon', 5],
+      ['command and control', 4], ['reverse shell', 4],
+      // Parent-child process abuse (svchost spawning arbitrary binaries)
+      ['spawned via svchost', 5], ['via svchost', 4], ['via services.exe', 4],
+      // Credential theft
+      ['mimikatz', 5], ['lsass dump', 5], ['lsass.exe', 4],
+      ['credential dump', 4], ['ntds.dit', 5], ['sam database', 4],
+      // Code injection / shellcode
+      ['process injection', 4], ['dll injection', 4], ['shellcode', 4], ['process hollow', 4],
+      // Persistence / hooking
+      ['registry hook', 3], ['registry alteration', 3],
+      ['kernel hook', 4], ['kernel daemon hook', 4],
+      // Privilege escalation
+      ['token impersonation', 4], ['uac bypass', 4], ['rootkit', 4],
+      // Pre-ransomware staging (shadow copy CREATION ≠ deletion)
+      ['shadow copy creation', 3],
+      // Generic
+      ['malware', 3], ['keystroke', 3], ['lateral movement', 4],
+    ],
+    defaultPosture: 'ISOLATION_POSTURE',
+    defaultTarget: 'DESKTOP_HR_SYSTEM_NODE',
+  },
+  DATA_EXFILTRATION: {
+    signals: [
+      // Volume markers — require unit or qualifier to avoid C2 beacon false-positives
+      ['gb outbound', 5], ['mb outbound', 4], ['tb outbound', 5],
+      ['outbound volume', 4], ['anomalous outbound', 4], ['high-volume outbound', 4],
+      ['exceeds baseline operational', 4], ['exceeds baseline', 3],
+      // DLP alerts
+      ['dlp alert', 5], ['dlp event', 4], ['data loss prevention', 4],
+      // Cloud / repo exfil
+      ['upload to external', 4], ['sync to external', 4], ['external repo', 3],
+      ['bulk ledger sync', 4], ['large file transfer', 3],
+      // DNS tunneling
+      ['dns tunnel', 5], ['dns exfiltration', 5],
+      // Direct keyword
+      ['exfiltrat', 4],
+    ],
+    defaultPosture: 'ISOLATION_POSTURE',
+    defaultTarget: 'STORAGE_NODE_CLUSTER_01',
+  },
+  BRUTE_FORCE_ATTEMPT: {
+    signals: [
+      // Explicit auth failure text (NOT the word "auth" alone — that pollutes server names)
+      ['failed password for', 5], ['failed password', 4],
+      ['authentication failure', 4], ['login failure', 4],
+      ['logon failure', 4], ['invalid user', 4],
+      ['invalid credential', 4], ['access denied', 3],
+      // Retry / frequency
+      ['continuous retry', 5], ['retry count', 4], ['attempt count', 4],
+      ['repeated attempt', 4], ['multiple failure', 4],
+      // Attack type
+      ['brute force', 5], ['brute-force', 5],
+      ['password spray', 5], ['dictionary attack', 5], ['credential stuff', 5],
+      // Protocol-specific
+      ['kerberos pre-auth failure', 5], ['pre-authentication fail', 4],
+      ['failed ssh', 4], ['ssh brute', 5],
+      // Lockout indicators
+      ['account lockout', 4], ['too many attempt', 4], ['account locked', 4],
+    ],
+    defaultPosture: 'CREDENTIAL_REVOCATION',
+    defaultTarget: 'CORE_AUTH_DIRECTOR_SRV',
+  },
+  INSIDER_THREAT: {
+    signals: [
+      // Time-based anomalies
+      ['off-hours', 4], ['off hours', 4], ['after hours', 4],
+      ['outside business hours', 4], ['off-shift', 4],
+      ['anomalous access time', 4], ['unusual time', 3],
+      // Removable media
+      ['usb', 3], ['removable media', 4], ['mass storage device', 4], ['external drive', 4],
+      // Data hoarding
+      ['bulk download', 4], ['data dump', 4], ['large download', 3],
+      ['unusual download volume', 4], ['mass export', 4], ['data export', 3],
+      // Personal-cloud uploads
+      ['personal email', 4], ['personal cloud', 4], ['gmail', 3],
+      // Location / travel anomaly
+      ['geo-anomaly', 4], ['impossible travel', 4], ['unusual location', 4],
+    ],
+    defaultPosture: 'CREDENTIAL_REVOCATION',
+    defaultTarget: 'DESKTOP_HR_SYSTEM_NODE',
+  },
+};
+
+// Tie-break: when two categories have equal score, the more severe one wins.
+const SEVERITY_PRIORITY = {
+  RANSOMWARE_DEPLOYMENT: 5,
+  ENDPOINT_COMPROMISE:   4,
+  DATA_EXFILTRATION:     3,
+  INSIDER_THREAT:        2,
+  BRUTE_FORCE_ATTEMPT:   1,
+};
+
+// Scans the raw (pre-lowercase) log for known node IDs so the target field
+// reflects what the log actually says rather than a hardcoded default.
+const extractTargetInfra = (rawInput) => {
+  const upper = rawInput.toUpperCase();
+  const known = [
+    'FINANCE_PAYROLL_DESKTOP_04',
+    'CORE_AUTH_DIRECTOR_SRV',
+    'STORAGE_NODE_CLUSTER_01',
+    'DESKTOP_HR_SYSTEM_NODE',
+  ];
+  for (const id of known) {
+    if (upper.includes(id)) return id;
+  }
+  return null;
+};
+
 const ADVERSARIAL_PATTERNS = [
   'ignore previous instructions',
-  'system override',
-  'prompt injection',
+  'ignore all previous',
   'disregard all',
   'forget your instructions',
-  'new instructions',
+  'new system prompt',
+  'system override',
+  'prompt injection',
   'act as',
+  'you are now a',
+  'pretend to be',
+  'bypass filter',
   'jailbreak',
 ];
 
@@ -214,39 +355,66 @@ export default function NexusShieldConsole() {
     setPostureStatus('STANDARD'); // clear any stale CRITICAL badge from a previous run
 
     setTimeout(() => {
-      let vectorClass        = 'MALICIOUS_ANOMALY_UNKNOWN';
-      let targetInfra        = 'UNIDENTIFIED_NODE_SRV';
-      let operationalPosture = 'CONTAINMENT_MODE';
-      let statusIndicator    = 'STANDARD';
+      // ── Step 1: RAG financial override — highest priority ────────────────
+      // 'payroll' and 'ledger' are infrastructure-specific; bare 'financial'
+      // is intentionally excluded to avoid mis-firing on finance user accounts.
+      const FINANCIAL_KEYWORDS = ['payroll', 'ledger', 'finance-payroll', 'payroll-desktop'];
+      if (FINANCIAL_KEYWORDS.some(k => lowInput.includes(k))) {
+        setOutputJson({
+          incident_report: {
+            vector_class:          'FINANCIAL_SYSTEM_COMPROMISE',
+            target_infrastructure: extractTargetInfra(inputLog) || 'FINANCE_PAYROLL_DESKTOP_04',
+            operational_posture:   'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED',
+          },
+        });
+        setPostureStatus('CRITICAL');
+        setLogs(prev => [inputLog, ...prev]);
+        setIsProcessing(false);
+        return;
+      }
 
-      // Financial/RAG check is first — prevents 'auth' in payroll logs mis-firing brute-force
-      if (lowInput.includes('payroll') || lowInput.includes('financial') || lowInput.includes('ledger') || lowInput.includes('payroll-desktop-04')) {
-        vectorClass        = 'FINANCIAL_SYSTEM_COMPROMISE';
-        targetInfra        = 'FINANCE_PAYROLL_DESKTOP_04';
-        operationalPosture = 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED';
-        statusIndicator    = 'CRITICAL';
-      } else if (lowInput.includes('ssh') || lowInput.includes('password') || lowInput.includes('auth')) {
-        vectorClass        = 'BRUTE_FORCE_ATTEMPT';
-        targetInfra        = 'CORE_AUTH_DIRECTOR_SRV';
-        operationalPosture = 'CONTAINMENT_MODE';
-      } else if (lowInput.includes('exfiltrat') || lowInput.includes('outbound') || lowInput.includes('storage')) {
-        vectorClass        = 'DATA_EXFILTRATION';
-        targetInfra        = 'STORAGE_NODE_CLUSTER_01';
-        operationalPosture = 'ISOLATION_POSTURE';
-      } else if (lowInput.includes('keystroke') || lowInput.includes('malware') || lowInput.includes('workstation')) {
-        vectorClass        = 'ENDPOINT_COMPROMISE';
-        targetInfra        = 'DESKTOP_HR_SYSTEM_NODE';
-        operationalPosture = 'CREDENTIAL_REVOCATION';
+      // ── Step 2: Signal scoring — accumulate weighted matches per category ─
+      let bestCategory    = null;
+      let bestScore       = 0;
+      let activeCategories = 0;
+
+      for (const [category, config] of Object.entries(SIGNAL_RULES)) {
+        let score = 0;
+        for (const [keyword, weight] of config.signals) {
+          if (lowInput.includes(keyword)) score += weight;
+        }
+        if (score > 0) activeCategories++;
+        if (
+          score > bestScore ||
+          (score === bestScore && score > 0 &&
+           (SEVERITY_PRIORITY[category] ?? 0) > (SEVERITY_PRIORITY[bestCategory] ?? 0))
+        ) {
+          bestScore    = score;
+          bestCategory = category;
+        }
+      }
+
+      // ── Step 3: Resolve output fields ────────────────────────────────────
+      const vectorClass  = bestCategory || 'MALICIOUS_ANOMALY_UNKNOWN';
+      const targetInfra  = extractTargetInfra(inputLog) ||
+                           (bestCategory ? SIGNAL_RULES[bestCategory].defaultTarget : 'UNIDENTIFIED_NODE_SRV');
+
+      let operationalPosture = 'CONTAINMENT_MODE';
+      if (bestCategory && bestScore > 0) {
+        operationalPosture = SIGNAL_RULES[bestCategory].defaultPosture;
+        // Multi-vector: two or more distinct categories fired — force isolation
+        // regardless of what the primary category's default posture is.
+        if (activeCategories >= 2) operationalPosture = 'ISOLATION_POSTURE';
       }
 
       setOutputJson({
         incident_report: {
-          vector_class:           vectorClass,
-          target_infrastructure:  targetInfra,
-          operational_posture:    operationalPosture,
+          vector_class:          vectorClass,
+          target_infrastructure: targetInfra,
+          operational_posture:   operationalPosture,
         },
       });
-      setPostureStatus(statusIndicator);
+      setPostureStatus('STANDARD');
       setLogs(prev => [inputLog, ...prev]);
       setIsProcessing(false);
     }, 750);
