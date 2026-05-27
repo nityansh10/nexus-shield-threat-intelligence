@@ -145,17 +145,55 @@ const extractTargetInfra = (rawInput) => {
 };
 
 const ADVERSARIAL_PATTERNS = [
-  'ignore previous instructions',
+  // ── "forget" family ─────────────────────────────────────────────────────────
+  // 'forget your instructions' alone misses "forget ALL YOUR previous instructions"
+  // because the substring check requires the exact phrase — extra intervening words
+  // break the match. Cover the full family with fragment-level anchors instead.
+  'forget all',           // forget all (your/previous/my) instructions
+  'forget everything',    // forget everything you know
+  'forget your',          // forget your instructions / forget your training
+
+  // ── "ignore" family ──────────────────────────────────────────────────────────
+  'ignore previous',      // ignore previous instructions / guidelines
   'ignore all previous',
+  'ignore safety',        // ignore safety parameters / constraints
+  'ignore all instructions',
+  'ignore your',          // ignore your guidelines / training
+
+  // ── "disregard" family ───────────────────────────────────────────────────────
   'disregard all',
-  'forget your instructions',
-  'new system prompt',
+  'disregard previous',   // disregard previous instructions
+  'disregard your',
+
+  // ── "override / reset" family ────────────────────────────────────────────────
   'system override',
-  'prompt injection',
+  'override all',         // override all instructions / safety
+  'override your',
+  'reset your',           // reset your instructions / parameters
+  'reset all',
+
+  // ── instruction-replacement phrases ──────────────────────────────────────────
+  'previous instructions',   // "...your previous instructions" / "forget all previous instructions"
+  'previous guidelines',     // ignore previous guidelines
+  'all instructions',        // override all instructions / forget all instructions
+  'your new instructions',
+  'these are your new',
+  'new system prompt',
+  'your real instructions',
+
+  // ── role / persona hijack ─────────────────────────────────────────────────────
   'act as',
   'you are now a',
+  'you are now an',
   'pretend to be',
+  'pretend you are',
+  'roleplay as',
+
+  // ── direct injection markers ──────────────────────────────────────────────────
+  'prompt injection',
   'bypass filter',
+  'bypass all',
+  'bypass safety',
   'jailbreak',
 ];
 
