@@ -51,6 +51,9 @@ const SIGNAL_RULES = {
       ['token impersonation', 4], ['uac bypass', 4], ['rootkit', 4],
       // Pre-ransomware staging (shadow copy CREATION ≠ deletion)
       ['shadow copy creation', 3],
+      // Protocol abuse for C2 (T1095 — non-application layer protocol)
+      ['non-application layer', 4], ['protocol abuse', 4],
+      ['covert channel', 3], ['encrypted icmp', 5],
       // Generic
       ['malware', 3], ['keystroke', 3], ['lateral movement', 4],
     ],
@@ -68,8 +71,17 @@ const SIGNAL_RULES = {
       // Cloud / repo exfil
       ['upload to external', 4], ['sync to external', 4], ['external repo', 3],
       ['bulk ledger sync', 4], ['large file transfer', 3],
-      // DNS tunneling
+      // DNS / ICMP / protocol tunneling (T1048, T1095)
+      // "non-standard encrypted" catches ICMP/HTTP payloads carrying smuggled data
       ['dns tunnel', 5], ['dns exfiltration', 5],
+      ['icmp tunnel', 5], ['icmp payload', 4],
+      ['non-standard encrypted', 5], ['encrypted text payload', 5],
+      ['non-standard payload', 4], ['protocol tunnel', 4],
+      // Destination anomaly — traffic to unknown/unmapped external hosts
+      ['unmapped external', 4], ['external public node', 4],
+      ['unregistered external', 4], ['unknown external', 4],
+      // Covert channel / steganography
+      ['covert channel', 5], ['steganograph', 4],
       // Direct keyword
       ['exfiltrat', 4],
     ],
