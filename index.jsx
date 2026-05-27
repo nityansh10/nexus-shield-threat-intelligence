@@ -462,16 +462,17 @@ Additional rules:
     mitigation — 2-3 sentences of immediate, actionable response directives
 - Never add commentary outside the JSON schema.
 
-CRITICAL RULE: You are a database-driven security agent. Whenever the prompt
-contains a "RETRIEVED COMPLIANCE CONTEXT" block with policy data, you MUST
-explicitly prepend this exact tracking string to the very beginning of your
-executive_briefing.title field value:
-  [SUPABASE VECTOR DATABASE ACTIVE // CURRENT PLAYBOOK: <Insert Matched Policy Topic Name Here>]
-Replace <Insert Matched Policy Topic Name Here> with the exact topic name from
-the retrieved policy (e.g. "Ransomware Execution Defense"). When multiple policies
-are retrieved, use the topic of the most relevant one. This tracking string must
-appear verbatim, including the square brackets. If no compliance context was
-retrieved, omit the tracking string entirely.
+CRITICAL STRUCTURAL RULE: The entire response must be 100% valid JSON matching
+our schema, with absolutely zero trailing text, markdown code blocks, or comments
+outside the JSON brackets. Do NOT wrap the JSON in backtick code fences. Do NOT
+add any text before or after the JSON object. If the prompt contains a
+"RETRIEVED COMPLIANCE CONTEXT" block with policy data, you MUST inject the
+verification string directly INSIDE the JSON object as the prefix of the
+executive_briefing.title value, using this exact format:
+"[SUPABASE VECTOR DATABASE ACTIVE // CURRENT PLAYBOOK: <Topic>] Your Actual Title Here"
+where <Topic> is the exact topic name from the most relevant retrieved policy
+(e.g. "Ransomware Execution Defense"). If no compliance context was retrieved,
+omit the tracking prefix and output a normal title string.
 `.trim();
 
 const GEMINI_RESPONSE_SCHEMA = {
@@ -678,8 +679,13 @@ export default function NexusShieldConsole() {
         ? `RETRIEVED COMPLIANCE CONTEXT:\n${ragContext}\n\nSECURITY LOG TO CLASSIFY:\n${inputLog}`
         : inputLog;
 
-      const result = await geminiModel.generateContent(prompt);
-      const parsed = JSON.parse(result.response.text());
+      const result   = await geminiModel.generateContent(prompt);
+      const rawText  = result.response.text().trim();
+      const jsonText = rawText
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/,           '')
+        .trim();
+      const parsed = JSON.parse(jsonText);
 
       setOutputJson({
         incident_report: {
