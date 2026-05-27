@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createClient }        from '@supabase/supabase-js';
 
 // ── Data constants ─────────────────────────────────────────────────────────────
 
@@ -515,6 +516,38 @@ const geminiModel = _genAI
     })
   : null;
 
+// ── Supabase pgvector client ───────────────────────────────────────────────────
+// text-embedding-004 is not available on this key; gemini-embedding-001 with
+// outputDimensionality=768 is used instead to match the vector(768) column.
+const supabaseClient =
+  import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY
+    ? createClient(
+        import.meta.env.VITE_SUPABASE_URL,
+        import.meta.env.VITE_SUPABASE_ANON_KEY,
+      )
+    : null;
+
+async function fetchQueryEmbedding(text) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1/models/gemini-embedding-001:embedContent?key=${_apiKey}`,
+    {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        content:              { parts: [{ text }] },
+        taskType:             'RETRIEVAL_QUERY',
+        outputDimensionality: 768,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message ?? `Embedding API HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.embedding.values;
+}
+
 // ── Design tokens ──────────────────────────────────────────────────────────────
 
 const C = {
@@ -594,7 +627,7 @@ export default function NexusShieldConsole() {
 
     const lowInput = inputLog.toLowerCase();
 
-    // ── Adversarial guardrail — always runs client-side, BEFORE any API call ──
+    // ── Phase A: Adversarial guardrail — client-side, BEFORE any network call ──
     if (ADVERSARIAL_PATTERNS.some(p => lowInput.includes(p))) {
       setBlockedInput(inputLog);
       setHijackBlocked(true);
@@ -604,34 +637,61 @@ export default function NexusShieldConsole() {
     setIsProcessing(true);
     setPostureStatus('STANDARD');
 
-    // ── Primary engine: Gemini 2.5 Flash ─────────────────────────────────────
-    if (geminiModel) {
-      try {
-        const result  = await geminiModel.generateContent(inputLog);
-        const parsed  = JSON.parse(result.response.text());
-        setOutputJson({
-          incident_report: {
-            vector_class:          parsed.vector_class,
-            target_infrastructure: parsed.target_infrastructure,
-            operational_posture:   parsed.operational_posture,
-            executive_briefing:    parsed.executive_briefing,
-          },
-        });
-        setPostureStatus(
-          parsed.operational_posture === 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'
-            ? 'CRITICAL'
-            : 'STANDARD',
-        );
-        setLogs(prev => [inputLog, ...prev]);
-        setIsProcessing(false);
-        return;
-      } catch (err) {
-        // API unreachable or quota exceeded — degrade gracefully to local engine
-        console.warn('[NEXUS-SHIELD] Gemini API unavailable — falling back to local policy engine.', err);
+    // ── Primary RAG pipeline: Phases B → C → D ────────────────────────────────
+    try {
+      if (!_apiKey || !supabaseClient || !geminiModel) {
+        throw new Error('RAG pipeline not configured — missing env keys');
       }
+
+      // Phase B: Vectorize the log input (768-dim via gemini-embedding-001)
+      const queryVector = await fetchQueryEmbedding(inputLog);
+
+      // Phase C: Semantic similarity search against Supabase compliance_policies
+      const { data: ragPolicies, error: ragError } = await supabaseClient.rpc('match_policies', {
+        query_embedding: queryVector,
+        match_threshold: 0.35,
+        match_count:     2,
+      });
+      if (ragError) throw ragError;
+
+      // Phase D: Augment Gemini prompt with retrieved compliance context blocks
+      const ragContext = (ragPolicies && ragPolicies.length > 0)
+        ? ragPolicies
+            .map((p, i) =>
+              `[COMPLIANCE POLICY ${i + 1} — ${p.topic.toUpperCase()}]\n${p.policy_text}`,
+            )
+            .join('\n\n')
+        : '';
+
+      const prompt = ragContext
+        ? `RETRIEVED COMPLIANCE CONTEXT:\n${ragContext}\n\nSECURITY LOG TO CLASSIFY:\n${inputLog}`
+        : inputLog;
+
+      const result = await geminiModel.generateContent(prompt);
+      const parsed = JSON.parse(result.response.text());
+
+      setOutputJson({
+        incident_report: {
+          vector_class:          parsed.vector_class,
+          target_infrastructure: parsed.target_infrastructure,
+          operational_posture:   parsed.operational_posture,
+          executive_briefing:    parsed.executive_briefing,
+        },
+      });
+      setPostureStatus(
+        parsed.operational_posture === 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'
+          ? 'CRITICAL'
+          : 'STANDARD',
+      );
+      setLogs(prev => [inputLog, ...prev]);
+      setIsProcessing(false);
+      return;
+
+    } catch (err) {
+      // ── Layer 3 fallback: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ───────
+      console.warn('[NEXUS-SHIELD] RAG pipeline unavailable — activating Layer 3 local engine.', err);
     }
 
-    // ── Fallback engine: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ──────────
     setTimeout(() => {
       const matchedPolicy = THREAT_POLICY_REGISTRY.find(policy => policy.match(lowInput));
       if (matchedPolicy) {
