@@ -261,33 +261,45 @@ const ERROR_CATALOG = {
 };
 
 const EXECUTIVE_BRIEFINGS = {
+  // ── POLICY_05 ───────────────────────────────────────────────────────────────
   BRUTE_FORCE_ATTEMPT: {
     title: 'Credential Brute-Force Detected',
     impact:
-      'An attacker is systematically cycling password combinations against an authentication endpoint. A single successful guess grants direct system access — bypassing every downstream access control.',
+      'An attacker is systematically cycling password combinations against the authentication endpoint. A single successful guess grants direct system access — bypassing every downstream control.',
     mitigation:
-      'Rate-limit and geo-block the source IP immediately. Enforce MFA on all authentication endpoints. Rotate credentials on targeted accounts. Deploy exponential backoff or CAPTCHA challenge on repeated failures.',
+      'Rate-limit and block the source IP range immediately. Enforce MFA across all authentication endpoints. Deploy exponential backoff or CAPTCHA on repeated failures.',
   },
+  // ── POLICY_03 ───────────────────────────────────────────────────────────────
   DATA_EXFILTRATION: {
     title: 'Unauthorized Data Exfiltration In Progress',
     impact:
-      'Sensitive corporate data is being transferred off-network at high volume right now. Customer records, intellectual property, or financial data may already be in adversary hands.',
+      'High-volume sensitive data is moving off-network from main storage arrays right now. Customer records, intellectual property, or financial data may already be in adversary hands.',
     mitigation:
-      'Isolate the affected node now. Terminate all outbound connections on the identified port. Engage your incident response team. Notify legal counsel if regulated data (PII, PCI, PHI) may be involved.',
+      'Isolate the storage node immediately and cut all outbound connections. Engage your incident response team. Notify legal counsel if regulated data (PII, PCI, PHI) is involved.',
   },
+  // ── POLICY_04 — new vector class for ICMP / covert channel tunneling ────────
+  DATA_EXFILTRATION_TUNNEL: {
+    title: 'ICMP Tunneling / Covert Channel Detected',
+    impact:
+      'An attacker is smuggling identity data inside harmless-looking ICMP ping packets to bypass perimeter firewalls. This is an active covert exfiltration channel — traffic volume is deliberately deceptive.',
+    mitigation:
+      'Block all outbound ICMP traffic to unmapped external public nodes immediately. Capture and preserve packet payloads for forensic analysis. Audit the CORE_AUTH_DIRECTOR_SRV process tree for the responsible binary.',
+  },
+  // ── POLICY_02 ───────────────────────────────────────────────────────────────
   ENDPOINT_COMPROMISE: {
-    title: 'Endpoint Fully Compromised',
+    title: 'Local Host Malware Intercepted',
     impact:
-      'Malicious code is executing with elevated privileges on a corporate asset. The attacker has persistence and can move laterally, harvest credentials, or stage a ransomware deployment at any time.',
+      'A keystroke logging script is actively harvesting user session tokens on an HR endpoint. Every credential entered since the time of compromise is considered stolen.',
     mitigation:
-      'Take the node offline immediately — do not reimage before forensics captures a full memory dump. Audit every account with recent access to this system. Assume all credentials touched by this host are stolen.',
+      'Revoke all active session profiles on this node immediately. Run localized endpoint remediation before reconnecting to the network. Audit all accounts that authenticated from this machine.',
   },
+  // ── POLICY_01 — NIST 901 RAG override ───────────────────────────────────────
   FINANCIAL_SYSTEM_COMPROMISE: {
-    title: 'Critical Financial System Breach — NIST RAG Policy Engaged',
+    title: 'Critical Financial System Breach — NIST 901 Engaged',
     impact:
-      'A high-value financial or payroll system has been compromised. Beyond standard endpoint risk, this directly exposes employee compensation records, banking credentials, and tax data. Mandatory regulatory disclosure may be triggered under SOX, PCI-DSS, and GDPR frameworks within 72 hours.',
+      'This breach directly exposes employee compensation records, banking credentials, and tax data. Mandatory regulatory disclosure may be triggered under SOX, PCI-DSS, and GDPR frameworks within 72 hours.',
     mitigation:
-      'Invoke the NIST 901 credential revocation protocol immediately — all finance-domain tokens must be invalidated now. Isolate the finance network segment from all other infrastructure. Notify your CFO, General Counsel, and external auditors before any other action. Do not run payroll cycles until full forensic clearance is obtained and documented.',
+      'Invoke NIST 901 credential revocation protocol immediately. Freeze all payroll processing cycles. Notify your CFO and General Counsel before any other action. Isolate the finance network segment from all other infrastructure.',
   },
   RANSOMWARE_DEPLOYMENT: {
     title: 'Active Ransomware Deployment',
@@ -319,6 +331,75 @@ const NETWORK_NODES = [
   { id: 'DESKTOP_HR_SYSTEM_NODE',     lines: ['DESKTOP HR', 'SYSTEM NODE'],   x: 570, y: 230 },
 ];
 const HUB = { x: 350, y: 160 };
+
+// ── Token-RAG Policy Registry ──────────────────────────────────────────────────
+// Immutable, ordered policy rules evaluated BEFORE the fuzzy SIGNAL_RULES scorer.
+// Each rule uses AND/OR token matching against lowercased input.
+// First-match wins; if no policy fires, execution falls through to SIGNAL_RULES.
+
+const THREAT_POLICY_REGISTRY = [
+  {
+    id: 'POLICY_01',
+    description: 'CRITICAL FINANCIAL DOMAIN — NIST 901 Override',
+    match: (low) =>
+      low.includes('finance_payroll_desktop_04') ||
+      low.includes('payroll') ||
+      low.includes('ledger') ||
+      low.includes('finance-payroll') ||
+      low.includes('payroll-desktop'),
+    vectorClass:        'FINANCIAL_SYSTEM_COMPROMISE',
+    targetInfra:        'FINANCE_PAYROLL_DESKTOP_04',
+    operationalPosture: 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED',
+    statusIndicator:    'CRITICAL',
+  },
+  {
+    id: 'POLICY_02',
+    description: 'LOCAL HOST MALWARE — HR Endpoint',
+    match: (low) =>
+      low.includes('desktop_hr_system_node') ||
+      low.includes('keystroke software logs') ||
+      low.includes('desktop-hr'),
+    vectorClass:        'ENDPOINT_COMPROMISE',
+    targetInfra:        'DESKTOP_HR_SYSTEM_NODE',
+    operationalPosture: 'CREDENTIAL_REVOCATION',
+    statusIndicator:    'STANDARD',
+  },
+  {
+    id: 'POLICY_03',
+    description: 'BULK STORAGE EXFILTRATION — Storage Cluster',
+    match: (low) =>
+      low.includes('storage_node_cluster_01') &&
+      (low.includes('download') || low.includes('archive') ||
+       low.includes('egress')   || low.includes('replication')),
+    vectorClass:        'DATA_EXFILTRATION',
+    targetInfra:        'STORAGE_NODE_CLUSTER_01',
+    operationalPosture: 'ISOLATION_POSTURE',
+    statusIndicator:    'STANDARD',
+  },
+  {
+    id: 'POLICY_04',
+    description: 'COVERT ICMP TUNNELING — Auth Director',
+    match: (low) =>
+      low.includes('core_auth_director_srv') &&
+      (low.includes('icmp') || low.includes('echo request') || low.includes('packets')),
+    vectorClass:        'DATA_EXFILTRATION_TUNNEL',
+    targetInfra:        'CORE_AUTH_DIRECTOR_SRV',
+    operationalPosture: 'NETWORK_EGRESS_BLOCK',
+    statusIndicator:    'STANDARD',
+  },
+  {
+    id: 'POLICY_05',
+    description: 'BRUTE FORCE SPRAYING — Auth Director',
+    match: (low) =>
+      low.includes('core_auth_director_srv') &&
+      (low.includes('failed authentication') || low.includes('brute-force') ||
+       low.includes('spraying') || low.includes('brute force')),
+    vectorClass:        'BRUTE_FORCE_ATTEMPT',
+    targetInfra:        'CORE_AUTH_DIRECTOR_SRV',
+    operationalPosture: 'CONTAINMENT_MODE',
+    statusIndicator:    'STANDARD',
+  },
+];
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 
@@ -410,25 +491,24 @@ export default function NexusShieldConsole() {
     setPostureStatus('STANDARD'); // clear any stale CRITICAL badge from a previous run
 
     setTimeout(() => {
-      // ── Step 1: RAG financial override — highest priority ────────────────
-      // 'payroll' and 'ledger' are infrastructure-specific; bare 'financial'
-      // is intentionally excluded to avoid mis-firing on finance user accounts.
-      const FINANCIAL_KEYWORDS = ['payroll', 'ledger', 'finance-payroll', 'payroll-desktop'];
-      if (FINANCIAL_KEYWORDS.some(k => lowInput.includes(k))) {
+      // ── Layer 1: THREAT_POLICY_REGISTRY — infrastructure-specific, high-confidence ──
+      // First-match wins; all 5 policies are evaluated in priority order.
+      const matchedPolicy = THREAT_POLICY_REGISTRY.find(policy => policy.match(lowInput));
+      if (matchedPolicy) {
         setOutputJson({
           incident_report: {
-            vector_class:          'FINANCIAL_SYSTEM_COMPROMISE',
-            target_infrastructure: extractTargetInfra(inputLog) || 'FINANCE_PAYROLL_DESKTOP_04',
-            operational_posture:   'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED',
+            vector_class:          matchedPolicy.vectorClass,
+            target_infrastructure: extractTargetInfra(inputLog) || matchedPolicy.targetInfra,
+            operational_posture:   matchedPolicy.operationalPosture,
           },
         });
-        setPostureStatus('CRITICAL');
+        setPostureStatus(matchedPolicy.statusIndicator);
         setLogs(prev => [inputLog, ...prev]);
         setIsProcessing(false);
         return;
       }
 
-      // ── Step 2: Signal scoring — accumulate weighted matches per category ─
+      // ── Layer 2: Signal scoring — accumulate weighted matches per category ─
       let bestCategory    = null;
       let bestScore       = 0;
       let activeCategories = 0;
