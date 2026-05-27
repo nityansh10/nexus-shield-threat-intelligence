@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // ── Data constants ─────────────────────────────────────────────────────────────
 
@@ -401,6 +402,119 @@ const THREAT_POLICY_REGISTRY = [
   },
 ];
 
+// ── Gemini API — system instruction, response schema, model instance ───────────
+// The model is initialised once at module load; the component just calls
+// geminiModel.generateContent(rawLog). If VITE_GEMINI_API_KEY is absent at
+// build time the value is null and the pipeline falls back to local rules.
+
+const GEMINI_SYSTEM_INSTRUCTION = `
+You are NEXUS-SHIELD, an enterprise cybersecurity threat intelligence engine.
+Analyse the incoming raw security log and classify it using the following 5 immutable
+threat policies in strict priority order. The FIRST matching policy wins.
+
+POLICY_01 — FINANCIAL_SYSTEM_COMPROMISE (highest priority — NIST 901 override)
+  Triggers when: log mentions payroll systems, ledger records, finance-payroll,
+  payroll-desktop, or the node identifier FINANCE_PAYROLL_DESKTOP_04.
+  vector_class: "FINANCIAL_SYSTEM_COMPROMISE"
+  operational_posture: "CRITICAL_CREDENTIAL_REVOCATION_REQUIRED"
+  target_infrastructure: "FINANCE_PAYROLL_DESKTOP_04" (or exact node from log)
+
+POLICY_02 — ENDPOINT_COMPROMISE
+  Triggers when: log mentions DESKTOP_HR_SYSTEM_NODE, keystroke software logs,
+  active session token harvesting, or desktop-hr malware activity.
+  vector_class: "ENDPOINT_COMPROMISE"
+  operational_posture: "CREDENTIAL_REVOCATION"
+  target_infrastructure: "DESKTOP_HR_SYSTEM_NODE" (or exact node from log)
+
+POLICY_03 — DATA_EXFILTRATION
+  Triggers when: log mentions STORAGE_NODE_CLUSTER_01 combined with download,
+  archive, egress, or replication activity.
+  vector_class: "DATA_EXFILTRATION"
+  operational_posture: "ISOLATION_POSTURE"
+  target_infrastructure: "STORAGE_NODE_CLUSTER_01" (or exact node from log)
+
+POLICY_04 — DATA_EXFILTRATION_TUNNEL
+  Triggers when: log mentions CORE_AUTH_DIRECTOR_SRV combined with ICMP traffic,
+  echo request packets, or covert/non-standard encrypted payloads.
+  vector_class: "DATA_EXFILTRATION_TUNNEL"
+  operational_posture: "NETWORK_EGRESS_BLOCK"
+  target_infrastructure: "CORE_AUTH_DIRECTOR_SRV" (or exact node from log)
+
+POLICY_05 — BRUTE_FORCE_ATTEMPT
+  Triggers when: log mentions CORE_AUTH_DIRECTOR_SRV combined with failed
+  authentication, brute-force attempts, credential spraying, or account lockout.
+  vector_class: "BRUTE_FORCE_ATTEMPT"
+  operational_posture: "CONTAINMENT_MODE"
+  target_infrastructure: "CORE_AUTH_DIRECTOR_SRV" (or exact node from log)
+
+If no policy matches, use:
+  vector_class: "MALICIOUS_ANOMALY_UNKNOWN"
+  operational_posture: "CONTAINMENT_MODE"
+  target_infrastructure: "UNIDENTIFIED_NODE_SRV"
+
+Additional rules:
+- Extract the exact node identifier from the log text for target_infrastructure
+  whenever one is present; only fall back to the policy default when none is found.
+- For every classification generate a concise executive_briefing with three fields:
+    title      — a 5-8 word alert headline
+    impact     — 2-3 sentences describing the business risk right now
+    mitigation — 2-3 sentences of immediate, actionable response directives
+- Never add commentary outside the JSON schema.
+`.trim();
+
+const GEMINI_RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    vector_class: {
+      type: 'string',
+      enum: [
+        'FINANCIAL_SYSTEM_COMPROMISE',
+        'ENDPOINT_COMPROMISE',
+        'DATA_EXFILTRATION',
+        'DATA_EXFILTRATION_TUNNEL',
+        'BRUTE_FORCE_ATTEMPT',
+        'RANSOMWARE_DEPLOYMENT',
+        'INSIDER_THREAT',
+        'MALICIOUS_ANOMALY_UNKNOWN',
+      ],
+    },
+    target_infrastructure: { type: 'string' },
+    operational_posture: {
+      type: 'string',
+      enum: [
+        'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED',
+        'CREDENTIAL_REVOCATION',
+        'ISOLATION_POSTURE',
+        'NETWORK_EGRESS_BLOCK',
+        'CONTAINMENT_MODE',
+      ],
+    },
+    executive_briefing: {
+      type: 'object',
+      properties: {
+        title:      { type: 'string' },
+        impact:     { type: 'string' },
+        mitigation: { type: 'string' },
+      },
+      required: ['title', 'impact', 'mitigation'],
+    },
+  },
+  required: ['vector_class', 'target_infrastructure', 'operational_posture', 'executive_briefing'],
+};
+
+const _apiKey   = import.meta.env.VITE_GEMINI_API_KEY;
+const _genAI    = _apiKey ? new GoogleGenerativeAI(_apiKey) : null;
+const geminiModel = _genAI
+  ? _genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction: GEMINI_SYSTEM_INSTRUCTION,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema:   GEMINI_RESPONSE_SCHEMA,
+      },
+    })
+  : null;
+
 // ── Design tokens ──────────────────────────────────────────────────────────────
 
 const C = {
@@ -475,12 +589,12 @@ export default function NexusShieldConsole() {
     ]);
   }, []);
 
-  const executeDualEnginePipeline = () => {
+  const executeDualEnginePipeline = async () => {
     if (!inputLog.trim()) return;
 
     const lowInput = inputLog.toLowerCase();
 
-    // ── Adversarial guardrail ──────────────────────────────────────────────────
+    // ── Adversarial guardrail — always runs client-side, BEFORE any API call ──
     if (ADVERSARIAL_PATTERNS.some(p => lowInput.includes(p))) {
       setBlockedInput(inputLog);
       setHijackBlocked(true);
@@ -488,11 +602,37 @@ export default function NexusShieldConsole() {
     }
 
     setIsProcessing(true);
-    setPostureStatus('STANDARD'); // clear any stale CRITICAL badge from a previous run
+    setPostureStatus('STANDARD');
 
+    // ── Primary engine: Gemini 2.5 Flash ─────────────────────────────────────
+    if (geminiModel) {
+      try {
+        const result  = await geminiModel.generateContent(inputLog);
+        const parsed  = JSON.parse(result.response.text());
+        setOutputJson({
+          incident_report: {
+            vector_class:          parsed.vector_class,
+            target_infrastructure: parsed.target_infrastructure,
+            operational_posture:   parsed.operational_posture,
+            executive_briefing:    parsed.executive_briefing,
+          },
+        });
+        setPostureStatus(
+          parsed.operational_posture === 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'
+            ? 'CRITICAL'
+            : 'STANDARD',
+        );
+        setLogs(prev => [inputLog, ...prev]);
+        setIsProcessing(false);
+        return;
+      } catch (err) {
+        // API unreachable or quota exceeded — degrade gracefully to local engine
+        console.warn('[NEXUS-SHIELD] Gemini API unavailable — falling back to local policy engine.', err);
+      }
+    }
+
+    // ── Fallback engine: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ──────────
     setTimeout(() => {
-      // ── Layer 1: THREAT_POLICY_REGISTRY — infrastructure-specific, high-confidence ──
-      // First-match wins; all 5 policies are evaluated in priority order.
       const matchedPolicy = THREAT_POLICY_REGISTRY.find(policy => policy.match(lowInput));
       if (matchedPolicy) {
         setOutputJson({
@@ -508,9 +648,9 @@ export default function NexusShieldConsole() {
         return;
       }
 
-      // ── Layer 2: Signal scoring — accumulate weighted matches per category ─
-      let bestCategory    = null;
-      let bestScore       = 0;
+      // SIGNAL_RULES weighted scorer
+      let bestCategory     = null;
+      let bestScore        = 0;
       let activeCategories = 0;
 
       for (const [category, config] of Object.entries(SIGNAL_RULES)) {
@@ -529,16 +669,13 @@ export default function NexusShieldConsole() {
         }
       }
 
-      // ── Step 3: Resolve output fields ────────────────────────────────────
-      const vectorClass  = bestCategory || 'MALICIOUS_ANOMALY_UNKNOWN';
-      const targetInfra  = extractTargetInfra(inputLog) ||
-                           (bestCategory ? SIGNAL_RULES[bestCategory].defaultTarget : 'UNIDENTIFIED_NODE_SRV');
+      const vectorClass = bestCategory || 'MALICIOUS_ANOMALY_UNKNOWN';
+      const targetInfra = extractTargetInfra(inputLog) ||
+                          (bestCategory ? SIGNAL_RULES[bestCategory].defaultTarget : 'UNIDENTIFIED_NODE_SRV');
 
       let operationalPosture = 'CONTAINMENT_MODE';
       if (bestCategory && bestScore > 0) {
         operationalPosture = SIGNAL_RULES[bestCategory].defaultPosture;
-        // Multi-vector: two or more distinct categories fired — force isolation
-        // regardless of what the primary category's default posture is.
         if (activeCategories >= 2) operationalPosture = 'ISOLATION_POSTURE';
       }
 
@@ -556,8 +693,12 @@ export default function NexusShieldConsole() {
   };
 
   const activeTarget = outputJson?.incident_report?.target_infrastructure;
+  // Prefer the live briefing generated by Gemini; fall back to the static table
+  // when running on the local fallback engine (no API key or API failure).
   const briefing     = outputJson
-    ? (EXECUTIVE_BRIEFINGS[outputJson.incident_report.vector_class] ?? EXECUTIVE_BRIEFINGS.MALICIOUS_ANOMALY_UNKNOWN)
+    ? (outputJson.incident_report.executive_briefing ??
+       EXECUTIVE_BRIEFINGS[outputJson.incident_report.vector_class] ??
+       EXECUTIVE_BRIEFINGS.MALICIOUS_ANOMALY_UNKNOWN)
     : null;
   const isCritical   = postureStatus === 'CRITICAL';
 
