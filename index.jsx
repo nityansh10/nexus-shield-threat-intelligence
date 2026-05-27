@@ -461,6 +461,17 @@ Additional rules:
     impact     — 2-3 sentences describing the business risk right now
     mitigation — 2-3 sentences of immediate, actionable response directives
 - Never add commentary outside the JSON schema.
+
+CRITICAL RULE: You are a database-driven security agent. Whenever the prompt
+contains a "RETRIEVED COMPLIANCE CONTEXT" block with policy data, you MUST
+explicitly prepend this exact tracking string to the very beginning of your
+executive_briefing.title field value:
+  [SUPABASE VECTOR DATABASE ACTIVE // CURRENT PLAYBOOK: <Insert Matched Policy Topic Name Here>]
+Replace <Insert Matched Policy Topic Name Here> with the exact topic name from
+the retrieved policy (e.g. "Ransomware Execution Defense"). When multiple policies
+are retrieved, use the topic of the most relevant one. This tracking string must
+appear verbatim, including the square brackets. If no compliance context was
+retrieved, omit the tracking string entirely.
 `.trim();
 
 const GEMINI_RESPONSE_SCHEMA = {
@@ -649,8 +660,8 @@ export default function NexusShieldConsole() {
       // Phase C: Semantic similarity search against Supabase compliance_policies
       const { data: ragPolicies, error: ragError } = await supabaseClient.rpc('match_policies', {
         query_embedding: queryVector,
-        match_threshold: 0.35,
-        match_count:     2,
+        match_threshold: 0.15,
+        match_count:     3,
       });
       if (ragError) throw ragError;
 
