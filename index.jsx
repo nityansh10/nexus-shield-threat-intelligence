@@ -273,31 +273,35 @@ const HUB = { x: 350, y: 160 };
 // ── Design tokens ──────────────────────────────────────────────────────────────
 
 const C = {
-  bg:      '#0e1726',
-  panel:   '#1e293b',
-  panelDk: '#0d1a2a',
-  border:  '#2e4a6b',
-  borderBright: '#3d6494',
-  cyan:    '#00f0ff',
-  pink:    '#ff0055',
-  white:   '#ffffff',
-  muted:   '#94a3b8',
-  dim:     '#64748b',
+  bg:          '#F8FAFC',
+  panel:       '#FFFFFF',
+  panelDk:     '#F1F5F9',
+  border:      '#E2E8F0',
+  borderBright:'#CBD5E1',
+  blue:        '#2563EB',
+  crimson:     '#DC2626',
+  amber:       '#D97706',
+  green:       '#16A34A',
+  text:        '#0F172A',
+  muted:       '#475569',
+  dim:         '#94A3B8',
+  shadow:      '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+  shadowMd:    '0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.05)',
 };
 
 // Returns the accent color for a network node based on threat severity and node identity.
-// FINANCE/CRITICAL → crimson, CORE_AUTH → cyan, all others → amber.
+// FINANCE/CRITICAL → crimson, CORE_AUTH → blue, all others → amber.
 const getNodeColor = (nodeId, isCritical) => {
-  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return '#ff0055';
-  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return '#00f0ff';
-  return '#ffaa00';
+  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return C.crimson;
+  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return C.blue;
+  return C.amber;
 };
 
 // Returns a low-opacity fill that pairs with each node's accent color.
 const getNodeFill = (nodeId, isCritical) => {
-  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return 'rgba(255,0,85,0.15)';
-  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return 'rgba(0,240,255,0.12)';
-  return 'rgba(255,170,0,0.15)';
+  if (isCritical || nodeId === 'FINANCE_PAYROLL_DESKTOP_04') return 'rgba(220,38,38,0.08)';
+  if (nodeId === 'CORE_AUTH_DIRECTOR_SRV') return 'rgba(37,99,235,0.08)';
+  return 'rgba(217,119,6,0.08)';
 };
 
 const panelStyle = (extra = {}) => ({
@@ -305,10 +309,11 @@ const panelStyle = (extra = {}) => ({
   border: `1px solid ${C.border}`,
   borderRadius: '8px',
   padding: '24px',
+  boxShadow: C.shadow,
   ...extra,
 });
 
-const headingStyle = (color = C.cyan) => ({
+const headingStyle = (color = C.blue) => ({
   fontSize: '16px',
   fontWeight: 'bold',
   color,
@@ -429,7 +434,7 @@ export default function NexusShieldConsole() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ backgroundColor: C.bg, color: C.white, minHeight: '100vh', padding: '32px', fontFamily: '"Courier New", Courier, monospace', boxSizing: 'border-box' }}>
+    <div style={{ backgroundColor: C.bg, color: C.text, minHeight: '100vh', padding: '32px', fontFamily: '"Courier New", Courier, monospace', boxSizing: 'border-box' }}>
 
       {/* Keyframe animations */}
       <style>{`
@@ -442,8 +447,8 @@ export default function NexusShieldConsole() {
           to   { stroke-dashoffset: 0; }
         }
         @keyframes shieldGlow {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(255, 0, 85, 0.55); }
-          50%       { box-shadow: 0 0 0 18px rgba(255, 0, 85, 0); }
+          0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+          50%       { box-shadow: 0 0 0 18px rgba(220, 38, 38, 0); }
         }
         @keyframes fadeUp {
           from { opacity: 0; transform: translateY(10px); }
@@ -459,7 +464,8 @@ export default function NexusShieldConsole() {
       {hijackBlocked && (
         <div style={{
           position: 'fixed', inset: 0,
-          background: 'rgba(10, 17, 28, 0.97)',
+          background: 'rgba(15, 23, 42, 0.55)',
+          backdropFilter: 'blur(4px)',
           zIndex: 1000,
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
@@ -467,34 +473,35 @@ export default function NexusShieldConsole() {
         }}>
           <div style={{
             background: C.panel,
-            border: `2px solid ${C.pink}`,
+            border: `2px solid ${C.crimson}`,
             borderRadius: '12px',
             padding: '48px 56px',
             maxWidth: '620px',
             width: '90%',
             textAlign: 'center',
+            boxShadow: C.shadowMd,
             animation: 'shieldGlow 1.8s ease-in-out infinite',
           }}>
             <div style={{ fontSize: '56px', marginBottom: '20px', lineHeight: 1 }}>🛡</div>
-            <h2 style={{ fontSize: '22px', color: C.pink, letterSpacing: '2px', margin: '0 0 8px 0' }}>
+            <h2 style={{ fontSize: '22px', color: C.crimson, letterSpacing: '2px', margin: '0 0 8px 0' }}>
               ALIGNMENT HIJACK BLOCKED
             </h2>
-            <p style={{ fontSize: '13px', color: C.dim, letterSpacing: '1px', margin: '0 0 28px 0' }}>
+            <p style={{ fontSize: '13px', color: C.muted, letterSpacing: '1px', margin: '0 0 28px 0' }}>
               STATUS: HIJACK_ATTEMPT_BLOCKED // PIPELINE FROZEN
             </p>
             <div style={{
-              background: C.panelDk,
-              border: `1px dashed ${C.pink}`,
+              background: '#FEF2F2',
+              border: `1px dashed ${C.crimson}`,
               borderRadius: '6px',
               padding: '14px 18px',
               marginBottom: '28px',
               fontSize: '13px',
-              color: C.pink,
+              color: C.crimson,
               textAlign: 'left',
               lineHeight: '1.6',
               wordBreak: 'break-word',
             }}>
-              <strong style={{ display: 'block', marginBottom: '6px', color: C.white }}>
+              <strong style={{ display: 'block', marginBottom: '6px', color: C.text }}>
                 INTERCEPTED INPUT:
               </strong>
               {blockedInput.length > 180 ? `${blockedInput.slice(0, 180)}…` : blockedInput}
@@ -507,8 +514,8 @@ export default function NexusShieldConsole() {
             <button
               onClick={() => { setHijackBlocked(false); setInputLog(''); setBlockedInput(''); }}
               style={{
-                background: C.pink,
-                color: C.white,
+                background: C.crimson,
+                color: '#FFFFFF',
                 border: 'none',
                 borderRadius: '6px',
                 padding: '13px 32px',
@@ -528,7 +535,7 @@ export default function NexusShieldConsole() {
 
       {/* ── HEADER ───────────────────────────────────────────────────────────── */}
       <header style={{
-        borderBottom: `2px solid ${C.cyan}`,
+        borderBottom: `2px solid ${C.blue}`,
         paddingBottom: '20px',
         marginBottom: '32px',
         display: 'flex',
@@ -538,11 +545,10 @@ export default function NexusShieldConsole() {
         <div>
           <h1 style={{
             margin: 0,
-            fontSize: '28px',
+            fontSize: '30px',
             fontWeight: 'bold',
-            color: C.cyan,
+            color: C.blue,
             letterSpacing: '2px',
-            textShadow: '0 0 14px rgba(0,240,255,0.5)',
           }}>
             NEXUS-SHIELD // AUTOMATED THREAT CO-PILOT
           </h1>
@@ -559,12 +565,12 @@ export default function NexusShieldConsole() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
             width: '11px', height: '11px',
-            backgroundColor: C.cyan,
+            backgroundColor: C.green,
             borderRadius: '50%',
             animation: 'scanPulse 1.6s ease-in-out infinite',
-            boxShadow: `0 0 8px ${C.cyan}`,
+            boxShadow: '0 0 6px rgba(22,163,74,0.5)',
           }} />
-          <span style={{ fontSize: '13px', color: C.cyan, letterSpacing: '1px' }}>
+          <span style={{ fontSize: '13px', color: C.green, letterSpacing: '1px', fontWeight: '600' }}>
             SYSTEM RECEPTOR ONLINE
           </span>
         </div>
@@ -575,16 +581,16 @@ export default function NexusShieldConsole() {
 
         {/* PANEL 1 — Live Ingestion Feed */}
         <div style={panelStyle()}>
-          <h2 style={headingStyle(C.pink)}>// LIVE RAW INGESTION FEED</h2>
+          <h2 style={headingStyle(C.crimson)}>// LIVE RAW INGESTION FEED</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '440px', overflowY: 'auto', paddingRight: '4px' }}>
             {logs.map((log, i) => (
               <div key={i} style={{
                 padding: '12px 14px',
                 background: C.panelDk,
-                borderLeft: `3px solid ${C.pink}`,
+                borderLeft: `3px solid ${C.amber}`,
                 borderRadius: '4px',
                 fontSize: '13px',
-                color: C.white,
+                color: C.text,
                 lineHeight: '1.55',
                 animation: i === 0 ? 'fadeUp 0.3s ease' : undefined,
               }}>
@@ -597,7 +603,7 @@ export default function NexusShieldConsole() {
         {/* PANEL 2 — Analysis Terminal */}
         <div style={panelStyle({ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' })}>
           <div>
-            <h2 style={headingStyle(C.cyan)}>// COMPLIANCE ANALYSIS GATEWAY</h2>
+            <h2 style={headingStyle(C.blue)}>// COMPLIANCE ANALYSIS GATEWAY</h2>
             <p style={{ color: C.muted, fontSize: '14px', lineHeight: '1.65', margin: '0 0 16px 0' }}>
               Paste raw network telemetry, brute-force alerts, or system anomaly strings below.
               The fine-tuned behavioral layer classifies the threat vector while the RAG engine
@@ -611,7 +617,7 @@ export default function NexusShieldConsole() {
                 width: '100%',
                 height: '200px',
                 backgroundColor: C.panelDk,
-                color: C.white,
+                color: C.text,
                 border: `1px solid ${C.borderBright}`,
                 borderRadius: '6px',
                 padding: '16px',
@@ -629,8 +635,8 @@ export default function NexusShieldConsole() {
             disabled={isProcessing}
             style={{
               width: '100%',
-              backgroundColor: isProcessing ? C.border : C.cyan,
-              color: C.bg,
+              backgroundColor: isProcessing ? C.borderBright : C.blue,
+              color: '#FFFFFF',
               border: 'none',
               borderRadius: '6px',
               padding: '16px',
@@ -642,7 +648,7 @@ export default function NexusShieldConsole() {
               letterSpacing: '2px',
               transition: 'all 0.2s ease',
               marginTop: '20px',
-              boxShadow: isProcessing ? 'none' : `0 0 18px rgba(0,240,255,0.35)`,
+              boxShadow: isProcessing ? 'none' : '0 2px 8px rgba(37,99,235,0.3)',
             }}
           >
             {isProcessing ? 'Analyzing Matrices...' : 'Run Hybrid Inference Pipeline'}
@@ -653,7 +659,7 @@ export default function NexusShieldConsole() {
         <div style={panelStyle()}>
           {/* Header row with posture badge */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <h2 style={{ ...headingStyle(C.cyan), borderBottom: 'none', marginBottom: 0, paddingBottom: 0 }}>
+            <h2 style={{ ...headingStyle(C.blue), borderBottom: 'none', marginBottom: 0, paddingBottom: 0 }}>
               // MATRIX COMPILER VIEW
             </h2>
             <span style={{
@@ -661,9 +667,9 @@ export default function NexusShieldConsole() {
               fontWeight: 'bold',
               padding: '4px 10px',
               borderRadius: '4px',
-              backgroundColor: isCritical ? 'rgba(255,0,85,0.18)' : 'rgba(0,240,255,0.12)',
-              color: isCritical ? C.pink : C.cyan,
-              border: `1px solid ${isCritical ? C.pink : C.cyan}`,
+              backgroundColor: isCritical ? 'rgba(220,38,38,0.08)' : 'rgba(22,163,74,0.08)',
+              color: isCritical ? C.crimson : C.green,
+              border: `1px solid ${isCritical ? C.crimson : C.green}`,
               whiteSpace: 'nowrap',
             }}>
               {postureStatus} POSTURE
@@ -676,7 +682,7 @@ export default function NexusShieldConsole() {
             borderRadius: '6px',
             padding: '16px',
             fontSize: '13px',
-            color: C.white,
+            color: C.text,
             overflowX: 'auto',
             minHeight: '160px',
             lineHeight: '1.6',
@@ -692,11 +698,11 @@ export default function NexusShieldConsole() {
           {isCritical && (
             <div style={{
               padding: '12px 14px',
-              background: 'rgba(255,0,85,0.1)',
-              border: `1px dashed ${C.pink}`,
+              background: 'rgba(220,38,38,0.06)',
+              border: `1px dashed ${C.crimson}`,
               borderRadius: '6px',
               fontSize: '13px',
-              color: C.pink,
+              color: C.crimson,
               lineHeight: '1.55',
               marginBottom: '14px',
             }}>
@@ -709,22 +715,22 @@ export default function NexusShieldConsole() {
           {briefing && (
             <div style={{
               background: C.panelDk,
-              border: `1px solid ${isCritical ? C.pink : C.borderBright}`,
+              border: `1px solid ${isCritical ? C.crimson : C.borderBright}`,
               borderRadius: '6px',
               padding: '16px',
               animation: 'fadeUp 0.35s ease',
             }}>
-              <p style={{ fontSize: '12px', color: isCritical ? C.pink : C.cyan, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+              <p style={{ fontSize: '12px', color: isCritical ? C.crimson : C.blue, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
                 // EXECUTIVE BRIEFING
               </p>
-              <p style={{ fontSize: '15px', fontWeight: 'bold', color: C.white, margin: '0 0 10px 0', lineHeight: '1.4' }}>
+              <p style={{ fontSize: '15px', fontWeight: 'bold', color: C.text, margin: '0 0 10px 0', lineHeight: '1.4' }}>
                 {briefing.title}
               </p>
               <p style={{ fontSize: '13px', color: C.muted, margin: '0 0 10px 0', lineHeight: '1.65' }}>
-                <strong style={{ color: C.white }}>Impact: </strong>{briefing.impact}
+                <strong style={{ color: C.text }}>Impact: </strong>{briefing.impact}
               </p>
               <p style={{ fontSize: '13px', color: C.muted, margin: 0, lineHeight: '1.65' }}>
-                <strong style={{ color: C.white }}>Mitigation: </strong>{briefing.mitigation}
+                <strong style={{ color: C.text }}>Mitigation: </strong>{briefing.mitigation}
               </p>
             </div>
           )}
@@ -736,7 +742,7 @@ export default function NexusShieldConsole() {
 
         {/* PANEL 4 — Network Topology Map */}
         <div style={panelStyle()}>
-          <h2 style={headingStyle(C.cyan)}>// NETWORK TOPOLOGY MAP</h2>
+          <h2 style={headingStyle(C.blue)}>// NETWORK TOPOLOGY MAP</h2>
           <p style={{ fontSize: '14px', color: C.muted, margin: '0 0 18px 0', lineHeight: '1.6' }}>
             Infrastructure node graph. Run an inference to highlight the compromised target node with a live aura signal.
           </p>
@@ -748,11 +754,11 @@ export default function NexusShieldConsole() {
             {/* Background grid lines (decorative) */}
             {[0,1,2,3,4,5,6].map(i => (
               <line key={`vg${i}`} x1={i*100+50} y1={0} x2={i*100+50} y2={295}
-                stroke={`${C.border}30`} strokeWidth={1} />
+                stroke={C.border} strokeWidth={1} />
             ))}
             {[0,1,2,3,4,5].map(i => (
               <line key={`hg${i}`} x1={0} y1={i*50+22} x2={700} y2={i*50+22}
-                stroke={`${C.border}30`} strokeWidth={1} />
+                stroke={C.border} strokeWidth={1} />
             ))}
 
             {/* Data lines from hub to each node */}
@@ -764,7 +770,7 @@ export default function NexusShieldConsole() {
                   key={`line-${node.id}`}
                   x1={HUB.x} y1={HUB.y}
                   x2={node.x} y2={node.y}
-                  stroke={isActive ? nodeColor : `${C.cyan}35`}
+                  stroke={isActive ? nodeColor : C.borderBright}
                   strokeWidth={isActive ? 3 : 1}
                   strokeDasharray={isActive ? '8 4' : '5 7'}
                   style={isActive
@@ -775,9 +781,9 @@ export default function NexusShieldConsole() {
             })}
 
             {/* Hub node */}
-            <circle cx={HUB.x} cy={HUB.y} r={14} fill={C.panelDk} stroke={C.cyan} strokeWidth={2} />
+            <circle cx={HUB.x} cy={HUB.y} r={14} fill={C.panelDk} stroke={C.blue} strokeWidth={2} />
             <text x={HUB.x} y={HUB.y + 5} textAnchor="middle" fontSize="9"
-              fill={C.cyan} fontFamily='"Courier New", monospace' fontWeight="bold">
+              fill={C.blue} fontFamily='"Courier New", monospace' fontWeight="bold">
               HUB
             </text>
 
@@ -802,14 +808,14 @@ export default function NexusShieldConsole() {
                   {/* Node circle */}
                   <circle
                     cx={node.x} cy={node.y} r={22}
-                    fill={isActive ? nodeFill : C.panelDk}
-                    stroke={isActive ? nodeColor : C.cyan}
+                    fill={isActive ? nodeFill : '#FFFFFF'}
+                    stroke={isActive ? nodeColor : C.borderBright}
                     strokeWidth={isActive ? 2.5 : 1.5}
                   />
                   {/* Node label — 2 lines */}
                   <text textAnchor="middle" fontSize="10"
                     fontFamily='"Courier New", monospace'
-                    fill={isActive ? nodeColor : C.cyan}
+                    fill={isActive ? nodeColor : C.muted}
                     fontWeight={isActive ? 'bold' : 'normal'}>
                     <tspan x={node.x} y={node.y + 32}>{node.lines[0]}</tspan>
                     <tspan x={node.x} y={node.y + 46}>{node.lines[1]}</tspan>
@@ -834,11 +840,11 @@ export default function NexusShieldConsole() {
                   borderRadius: '4px',
                   fontSize: '12px',
                   color: isActive ? nodeColor : C.muted,
+                  fontWeight: isActive ? '600' : 'normal',
                 }}>
                   <span style={{
                     width: '8px', height: '8px', borderRadius: '50%',
-                    background: isActive ? nodeColor : C.dim,
-                    boxShadow: isActive ? `0 0 6px ${nodeColor}` : 'none',
+                    background: isActive ? nodeColor : C.borderBright,
                     flexShrink: 0,
                   }} />
                   {node.id}
@@ -850,7 +856,7 @@ export default function NexusShieldConsole() {
 
         {/* PANEL 5 — System Diagnostic & Error Decoder */}
         <div style={panelStyle()}>
-          <h2 style={headingStyle(C.pink)}>// SYSTEM DIAGNOSTIC &amp; ERROR TRANSLATOR</h2>
+          <h2 style={headingStyle(C.crimson)}>// SYSTEM DIAGNOSTIC &amp; ERROR TRANSLATOR</h2>
           <p style={{ fontSize: '14px', color: C.muted, margin: '0 0 18px 0', lineHeight: '1.6' }}>
             AI engineering blockers resolved during model fine-tuning. Select an exception to see the
             raw stack, hardware explanation, and PM resolution strategy.
@@ -865,11 +871,11 @@ export default function NexusShieldConsole() {
                   key={key}
                   onClick={() => setActiveError(prev => prev === key ? null : key)}
                   style={{
-                    background: isActive ? 'rgba(255,0,85,0.15)' : C.panelDk,
-                    border: `1px solid ${isActive ? C.pink : C.border}`,
+                    background: isActive ? 'rgba(220,38,38,0.06)' : C.panelDk,
+                    border: `1px solid ${isActive ? C.crimson : C.border}`,
                     borderRadius: '6px',
                     padding: '11px 14px',
-                    color: isActive ? C.white : C.muted,
+                    color: isActive ? C.text : C.muted,
                     fontSize: '13px',
                     fontFamily: '"Courier New", Courier, monospace',
                     cursor: 'pointer',
@@ -881,7 +887,7 @@ export default function NexusShieldConsole() {
                   }}
                 >
                   <span>{err.label}</span>
-                  <span style={{ color: isActive ? C.pink : C.dim, fontSize: '16px', lineHeight: 1 }}>
+                  <span style={{ color: isActive ? C.crimson : C.dim, fontSize: '16px', lineHeight: 1 }}>
                     {isActive ? '▲' : '▼'}
                   </span>
                 </button>
@@ -893,7 +899,7 @@ export default function NexusShieldConsole() {
           {activeError && (
             <div style={{ animation: 'fadeUp 0.25s ease' }}>
               {/* Raw Exception Stack */}
-              <p style={{ fontSize: '12px', color: C.pink, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+              <p style={{ fontSize: '12px', color: C.crimson, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
                 RAW EXCEPTION STACK
               </p>
               <pre style={{
@@ -902,7 +908,7 @@ export default function NexusShieldConsole() {
                 borderRadius: '6px',
                 padding: '14px',
                 fontSize: '12px',
-                color: C.pink,
+                color: C.crimson,
                 overflowX: 'auto',
                 overflowY: 'auto',
                 maxHeight: '160px',
@@ -915,7 +921,7 @@ export default function NexusShieldConsole() {
               </pre>
 
               {/* Plain English Explanation */}
-              <p style={{ fontSize: '12px', color: C.cyan, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+              <p style={{ fontSize: '12px', color: C.blue, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
                 PLAIN ENGLISH EXPLANATION
               </p>
               <div style={{
@@ -924,7 +930,7 @@ export default function NexusShieldConsole() {
                 borderRadius: '6px',
                 padding: '14px',
                 fontSize: '13px',
-                color: C.white,
+                color: C.text,
                 lineHeight: '1.65',
                 marginBottom: '18px',
               }}>
@@ -932,16 +938,16 @@ export default function NexusShieldConsole() {
               </div>
 
               {/* PM Resolution Strategy */}
-              <p style={{ fontSize: '12px', color: '#00ff88', letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
+              <p style={{ fontSize: '12px', color: C.green, letterSpacing: '1px', margin: '0 0 8px 0', fontWeight: 'bold' }}>
                 PM RESOLUTION STRATEGY
               </p>
               <div style={{
-                background: 'rgba(0,255,136,0.06)',
-                border: '1px solid rgba(0,255,136,0.3)',
+                background: 'rgba(22,163,74,0.06)',
+                border: '1px solid rgba(22,163,74,0.25)',
                 borderRadius: '6px',
                 padding: '14px',
                 fontSize: '13px',
-                color: C.white,
+                color: C.text,
                 lineHeight: '1.65',
               }}>
                 {ERROR_CATALOG[activeError].resolution}
