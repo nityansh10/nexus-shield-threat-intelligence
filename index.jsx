@@ -515,7 +515,9 @@ const GEMINI_RESPONSE_SCHEMA = {
   required: ['vector_class', 'target_infrastructure', 'operational_posture', 'executive_briefing'],
 };
 
-const _apiKey   = import.meta.env.VITE_GEMINI_API_KEY;
+const _apiKey    = import.meta.env.VITE_GEMINI_API_KEY;
+const _hfToken   = import.meta.env.VITE_HF_API_TOKEN  ?? null;
+const _hfModelId = import.meta.env.VITE_HF_MODEL_ID   ?? null;
 const _genAI    = _apiKey ? new GoogleGenerativeAI(_apiKey) : null;
 const geminiModel = _genAI
   ? _genAI.getGenerativeModel({
@@ -558,6 +560,66 @@ async function fetchQueryEmbedding(text) {
   }
   const data = await res.json();
   return data.embedding.values;
+}
+
+// ── Fine-Tuned Model (Hugging Face Inference API) ─────────────────────────────
+// Calls the LoRA-adapted Phi-3-mini pushed to HF Hub after running nexus_finetune.py.
+// Returns { vector_class, target_infrastructure, operational_posture }.
+// Throws if the model is unconfigured, cold-starting, or returns unparseable output.
+
+async function fetchHFClassification(rawLog) {
+  if (!_hfToken || !_hfModelId) throw new Error('HF model not configured');
+
+  const systemPrompt =
+    'You are NEXUS-SHIELD, a cybersecurity incident classification engine. ' +
+    'Analyze the security log and output ONLY a JSON object with exactly three fields: ' +
+    'vector_class, target_infrastructure, and base_posture. No explanation. No markdown. ' +
+    'Only the JSON object.\n\n' +
+    'Allowed vector_class values: BRUTE_FORCE_ATTEMPT, DATA_EXFILTRATION, ' +
+    'ENDPOINT_COMPROMISE, RANSOMWARE_DEPLOYMENT, INSIDER_THREAT, ' +
+    'FINANCIAL_SYSTEM_COMPROMISE, MALICIOUS_ANOMALY_UNKNOWN\n' +
+    'Allowed base_posture values: CONTAINMENT_MODE, ISOLATION_POSTURE, ' +
+    'CREDENTIAL_REVOCATION, CRITICAL_CREDENTIAL_REVOCATION_REQUIRED';
+
+  const prompt =
+    `<|system|>\n${systemPrompt}<|end|>\n` +
+    `<|user|>\n${rawLog}<|end|>\n` +
+    `<|assistant|>\n`;
+
+  const res = await fetch(
+    `https://api-inference.huggingface.co/models/${_hfModelId}`,
+    {
+      method:  'POST',
+      headers: { 'Authorization': `Bearer ${_hfToken}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        inputs:     prompt,
+        parameters: { max_new_tokens: 120, temperature: 0.05, return_full_text: false },
+      }),
+    },
+  );
+
+  if (res.status === 503) {
+    const body = await res.json().catch(() => ({}));
+    const wait = body.estimated_time ?? 30;
+    throw new Error(`HF model warming up — retry in ~${Math.ceil(wait)}s`);
+  }
+  if (!res.ok) throw new Error(`HF Inference API HTTP ${res.status}`);
+
+  const data    = await res.json();
+  const rawText = (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() ?? '';
+
+  const firstBrace = rawText.indexOf('{');
+  const lastBrace  = rawText.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace <= firstBrace) throw new Error('No JSON in fine-tuned model output');
+
+  const parsed = JSON.parse(rawText.slice(firstBrace, lastBrace + 1));
+  const report = parsed.incident_report ?? parsed;
+
+  return {
+    vector_class:          report.vector_class          ?? 'MALICIOUS_ANOMALY_UNKNOWN',
+    target_infrastructure: report.target_infrastructure ?? extractTargetInfra(rawLog) ?? 'UNIDENTIFIED_NODE_SRV',
+    operational_posture:   report.base_posture          ?? report.operational_posture ?? 'CONTAINMENT_MODE',
+  };
 }
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
@@ -713,10 +775,26 @@ export default function NexusShieldConsole() {
       return;
 
     } catch (err) {
-      // ── Layer 3 fallback: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ───────
-      console.warn('[NEXUS-SHIELD] RAG pipeline unavailable — activating Layer 3 local engine.', err);
+      console.warn('[NEXUS-SHIELD] RAG pipeline unavailable — trying fine-tuned model.', err);
+
+      // ── Layer 2 fallback: Fine-Tuned Phi-3 via HF Inference API ─────────────
+      try {
+        const hfResult = await fetchHFClassification(inputLog);
+        setOutputJson({ incident_report: hfResult });
+        setPostureStatus(
+          hfResult.operational_posture === 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'
+            ? 'CRITICAL'
+            : 'STANDARD',
+        );
+        setLogs(prev => [inputLog, ...prev]);
+        setIsProcessing(false);
+        return;
+      } catch (hfErr) {
+        console.warn('[NEXUS-SHIELD] Fine-tuned model unavailable — activating Layer 3 local engine.', hfErr.message);
+      }
     }
 
+    // ── Layer 3 fallback: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ─────────
     setTimeout(() => {
       const matchedPolicy = THREAT_POLICY_REGISTRY.find(policy => policy.match(lowInput));
       if (matchedPolicy) {
