@@ -592,7 +592,7 @@ async function fetchHFClassification(rawLog) {
   const decoder = new TextDecoder();
   let buffer  = '';
   let rawText = '';
-  const deadline = Date.now() + 120_000;
+  const deadline = Date.now() + 300_000;
 
   outer: while (Date.now() < deadline) {
     const { value, done } = await reader.read();
