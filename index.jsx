@@ -568,45 +568,50 @@ async function fetchQueryEmbedding(text) {
 // Throws if the model is unconfigured, cold-starting, or returns unparseable output.
 
 async function fetchHFClassification(rawLog) {
-  if (!_hfToken || !_hfModelId) throw new Error('HF model not configured');
+  if (!_hfModelId) throw new Error('HF model not configured');
 
-  const systemPrompt =
-    'You are NEXUS-SHIELD, a cybersecurity incident classification engine. ' +
-    'Analyze the security log and output ONLY a JSON object with exactly three fields: ' +
-    'vector_class, target_infrastructure, and base_posture. No explanation. No markdown. ' +
-    'Only the JSON object.\n\n' +
-    'Allowed vector_class values: BRUTE_FORCE_ATTEMPT, DATA_EXFILTRATION, ' +
-    'ENDPOINT_COMPROMISE, RANSOMWARE_DEPLOYMENT, INSIDER_THREAT, ' +
-    'FINANCIAL_SYSTEM_COMPROMISE, MALICIOUS_ANOMALY_UNKNOWN\n' +
-    'Allowed base_posture values: CONTAINMENT_MODE, ISOLATION_POSTURE, ' +
-    'CREDENTIAL_REVOCATION, CRITICAL_CREDENTIAL_REVOCATION_REQUIRED';
+  // Gradio 5+ two-step API: POST to queue → GET SSE stream for result
+  const base = `https://${_hfModelId.replace('/', '-')}.hf.space/gradio_api/call/classify`;
 
-  const prompt =
-    `<|system|>\n${systemPrompt}<|end|>\n` +
-    `<|user|>\n${rawLog}<|end|>\n` +
-    `<|assistant|>\n`;
+  const queueRes = await fetch(base, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ data: [rawLog] }),
+  });
 
-  const res = await fetch(
-    `https://api-inference.huggingface.co/models/${_hfModelId}`,
-    {
-      method:  'POST',
-      headers: { 'Authorization': `Bearer ${_hfToken}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        inputs:     prompt,
-        parameters: { max_new_tokens: 120, temperature: 0.05, return_full_text: false },
-      }),
-    },
-  );
+  if (queueRes.status === 503) throw new Error('HF Space warming up — retry in ~30s');
+  if (!queueRes.ok) throw new Error(`HF Space queue HTTP ${queueRes.status}`);
 
-  if (res.status === 503) {
-    const body = await res.json().catch(() => ({}));
-    const wait = body.estimated_time ?? 30;
-    throw new Error(`HF model warming up — retry in ~${Math.ceil(wait)}s`);
+  const { event_id } = await queueRes.json();
+  if (!event_id) throw new Error('HF Space did not return an event_id');
+
+  const streamRes = await fetch(`${base}/${event_id}`);
+  if (!streamRes.ok) throw new Error(`HF Space stream HTTP ${streamRes.status}`);
+
+  const reader  = streamRes.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer  = '';
+  let rawText = '';
+  const deadline = Date.now() + 120_000;
+
+  outer: while (Date.now() < deadline) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith('event: complete')) {
+        const dataLine = lines[i + 1] ?? '';
+        const payload  = dataLine.replace(/^data:\s*/, '');
+        try { rawText = JSON.parse(payload)?.[0] ?? ''; } catch (_) { rawText = payload; }
+        break outer;
+      }
+      if (lines[i].startsWith('event: error')) throw new Error('HF Space returned an error event');
+    }
   }
-  if (!res.ok) throw new Error(`HF Inference API HTTP ${res.status}`);
 
-  const data    = await res.json();
-  const rawText = (Array.isArray(data) ? data[0]?.generated_text : data?.generated_text)?.trim() ?? '';
+  if (!rawText) throw new Error('HF Space timed out or returned empty output');
 
   const firstBrace = rawText.indexOf('{');
   const lastBrace  = rawText.lastIndexOf('}');
@@ -1444,3 +1449,4 @@ export default function NexusShieldConsole() {
     </div>
   );
 }
+                                                                                                                                                                                                                                                                                                                                
