@@ -687,6 +687,9 @@ export default function NexusShieldConsole() {
   const [hijackBlocked, setHijackBlocked] = useState(false);
   const [blockedInput, setBlockedInput] = useState('');
   const [activeError, setActiveError]   = useState(null);
+  const [hfResult, setHfResult]         = useState(null);
+  const [hfStatus, setHfStatus]         = useState('idle'); // 'idle'|'loading'|'done'|'warmup'|'error'
+  const [hfError, setHfError]           = useState('');
 
   useEffect(() => {
     setLogs([
@@ -710,6 +713,17 @@ export default function NexusShieldConsole() {
 
     setIsProcessing(true);
     setPostureStatus('STANDARD');
+    setHfResult(null);
+    setHfStatus('loading');
+    setHfError('');
+
+    // ── Fine-Tuned SLM sidecar — always runs in parallel, never blocks main pipeline ──
+    fetchHFClassification(inputLog)
+      .then(r  => { setHfResult(r); setHfStatus('done'); })
+      .catch(e => {
+        setHfStatus(e.message.includes('warming up') ? 'warmup' : 'error');
+        setHfError(e.message);
+      });
 
     // ── Primary RAG pipeline: Phases B → C → D ────────────────────────────────
     try {
@@ -775,23 +789,7 @@ export default function NexusShieldConsole() {
       return;
 
     } catch (err) {
-      console.warn('[NEXUS-SHIELD] RAG pipeline unavailable — trying fine-tuned model.', err);
-
-      // ── Layer 2 fallback: Fine-Tuned Phi-3 via HF Inference API ─────────────
-      try {
-        const hfResult = await fetchHFClassification(inputLog);
-        setOutputJson({ incident_report: hfResult });
-        setPostureStatus(
-          hfResult.operational_posture === 'CRITICAL_CREDENTIAL_REVOCATION_REQUIRED'
-            ? 'CRITICAL'
-            : 'STANDARD',
-        );
-        setLogs(prev => [inputLog, ...prev]);
-        setIsProcessing(false);
-        return;
-      } catch (hfErr) {
-        console.warn('[NEXUS-SHIELD] Fine-tuned model unavailable — activating Layer 3 local engine.', hfErr.message);
-      }
+      console.warn('[NEXUS-SHIELD] RAG pipeline unavailable — activating Layer 3 local engine.', err);
     }
 
     // ── Layer 3 fallback: local THREAT_POLICY_REGISTRY + SIGNAL_RULES ─────────
@@ -1166,6 +1164,59 @@ export default function NexusShieldConsole() {
               <p style={{ fontSize: '13px', color: C.muted, margin: 0, lineHeight: '1.65' }}>
                 <strong style={{ color: C.text }}>Mitigation: </strong>{briefing.mitigation}
               </p>
+            </div>
+          )}
+
+          {/* Layer 2 — Fine-Tuned SLM Panel (always runs in parallel with RAG) */}
+          {hfStatus !== 'idle' && (
+            <div style={{
+              background: C.panelDk,
+              border: `1px solid ${C.borderBright}`,
+              borderRadius: '6px',
+              padding: '14px 16px',
+              marginTop: '14px',
+              animation: 'fadeUp 0.35s ease',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <p style={{ fontSize: '12px', color: C.blue, letterSpacing: '1px', margin: 0, fontWeight: 'bold' }}>
+                  // LAYER 2 · FINE-TUNED SLM (PHI-3 LoRA)
+                </p>
+                <span style={{
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                  borderRadius: '3px',
+                  border: `1px solid ${hfStatus === 'done' ? C.green : hfStatus === 'error' ? C.crimson : C.amber}`,
+                  backgroundColor: hfStatus === 'done' ? 'rgba(22,163,74,0.08)' : hfStatus === 'error' ? 'rgba(220,38,38,0.08)' : 'rgba(217,119,6,0.08)',
+                  color: hfStatus === 'done' ? C.green : hfStatus === 'error' ? C.crimson : C.amber,
+                }}>
+                  {hfStatus === 'loading' ? 'INFERENCING...' : hfStatus === 'warmup' ? 'MODEL COLD-STARTING' : hfStatus === 'done' ? 'CLASSIFICATION READY' : 'UNAVAILABLE'}
+                </span>
+              </div>
+
+              {hfStatus === 'done' && hfResult && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                  {[
+                    { label: 'VECTOR CLASS',   value: hfResult.vector_class },
+                    { label: 'TARGET NODE',     value: hfResult.target_infrastructure },
+                    { label: 'POSTURE',         value: hfResult.operational_posture },
+                  ].map(({ label, value }) => (
+                    <div key={label} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: '4px', padding: '8px 10px' }}>
+                      <p style={{ fontSize: '10px', color: C.dim, margin: '0 0 4px 0', letterSpacing: '1px' }}>{label}</p>
+                      <p style={{ fontSize: '12px', color: C.text, margin: 0, fontWeight: 'bold', wordBreak: 'break-word', lineHeight: '1.4' }}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {hfStatus === 'loading' && (
+                <p style={{ fontSize: '12px', color: C.muted, margin: 0, animation: 'scanPulse 1.5s ease infinite' }}>
+                  Phi-3 LoRA adapter inference in progress...
+                </p>
+              )}
+
+              {(hfStatus === 'warmup' || hfStatus === 'error') && (
+                <p style={{ fontSize: '12px', color: C.muted, margin: 0 }}>{hfError}</p>
+              )}
             </div>
           )}
         </div>
